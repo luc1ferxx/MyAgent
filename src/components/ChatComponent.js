@@ -157,7 +157,7 @@ const ChatComponent = (props) => {
 
   const chatModeClickHandler = () => {
     if (!hasDocuments) {
-      message.warning("Upload at least one PDF before starting chat mode.");
+      message.warning("Upload at least one PDF before starting voice mode.");
       return;
     }
 
@@ -183,10 +183,48 @@ const ChatComponent = (props) => {
     }
   };
 
+  const transcriptLabel = isChatModeOn
+    ? isRecording
+      ? transcript || "Listening for your question."
+      : "Voice mode is on. Press record to ask the next question."
+    : hasDocuments
+      ? `Working with ${docLabel}`
+      : "Upload a PDF to start asking questions.";
+
   return (
     <div className="archive-composer-bar">
-      <div className="archive-composer-meta">
-        {hasDocuments ? `Asking ${docLabel}` : "No documents selected"}
+      <div className="archive-composer-top">
+        <div className="archive-composer-summary">
+          <div className="archive-composer-kicker">Workspace</div>
+          <div className="archive-composer-meta">
+            {hasDocuments ? docLabel : "No active documents"}
+          </div>
+        </div>
+
+        <div className="archive-voice-buttons">
+          <Button
+            type="primary"
+            size="large"
+            className={`archive-action-button ${isChatModeOn ? "is-active" : ""}`}
+            onClick={chatModeClickHandler}
+          >
+            Voice
+          </Button>
+
+          {isChatModeOn && (
+            <Button
+              type="primary"
+              icon={<AudioOutlined />}
+              size="large"
+              className={`archive-action-button ${
+                isRecording ? "is-recording" : ""
+              }`}
+              onClick={recordingClickHandler}
+            >
+              {isRecording ? "Listening" : "Record"}
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="archive-composer-controls">
@@ -195,8 +233,8 @@ const ChatComponent = (props) => {
             className="archive-search"
             placeholder={
               hasDocuments
-                ? "Ask a question"
-                : "Upload PDFs to start"
+                ? "Ask a question about the current documents"
+                : "Upload a PDF to begin"
             }
             enterButton="Ask"
             size="large"
@@ -208,28 +246,7 @@ const ChatComponent = (props) => {
           />
         )}
 
-        <Button
-          type="primary"
-          size="large"
-          className={`archive-action-button ${isChatModeOn ? "is-active" : ""}`}
-          onClick={chatModeClickHandler}
-        >
-          Voice
-        </Button>
-
-        {isChatModeOn && (
-          <Button
-            type="primary"
-            icon={<AudioOutlined />}
-            size="large"
-            className={`archive-action-button ${
-              isRecording ? "is-recording" : ""
-            }`}
-            onClick={recordingClickHandler}
-          >
-            {isRecording ? "Listening" : "Record"}
-          </Button>
-        )}
+        <div className="archive-composer-transcript">{transcriptLabel}</div>
       </div>
     </div>
   );

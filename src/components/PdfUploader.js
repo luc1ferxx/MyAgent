@@ -120,13 +120,18 @@ const PdfUploader = ({ onUploadSuccess }) => {
 
   return (
     <Dragger {...attributes}>
-      <div className="archive-uploader-icon">
-        <InboxOutlined />
+      <div className="archive-uploader-row">
+        <div className="archive-uploader-icon">
+          <InboxOutlined />
+        </div>
+
+        <div className="archive-uploader-copy-wrap">
+          <p className="archive-uploader-title">Add PDFs</p>
+          <p className="archive-uploader-copy">
+            Drop files here or click to browse.
+          </p>
+        </div>
       </div>
-      <p className="archive-uploader-title">Upload PDFs</p>
-      <p className="archive-uploader-copy">
-        Drag files here or click to select. Uploads are chunked and resumable.
-      </p>
     </Dragger>
   );
 };

@@ -6,7 +6,8 @@ const PdfPreview = ({ source }) => {
   if (!source?.filePath) {
     return (
       <div className="archive-preview-empty">
-        Select a cited source to preview the related PDF page.
+        <div className="archive-preview-empty-mark">No source selected</div>
+        <div>Choose a citation to preview the related page.</div>
       </div>
     );
   }
@@ -21,15 +22,20 @@ const PdfPreview = ({ source }) => {
           <div className="archive-preview-file">{source.fileName}</div>
           <div className="archive-preview-page">Page {pageNumber}</div>
         </div>
+
         <Button
           className="archive-secondary-button"
           href={previewUrl}
           target="_blank"
           rel="noreferrer"
         >
-          Open
+          Open full page
         </Button>
       </div>
+
+      {source.excerpt ? (
+        <p className="archive-preview-excerpt">{source.excerpt}</p>
+      ) : null}
 
       <iframe
         className="archive-preview-frame"

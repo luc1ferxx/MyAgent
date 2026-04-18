@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
-import { Button, Layout, Tag, Typography, message } from "antd";
+import { Button, Layout, Typography, message } from "antd";
 import PdfUploader from "./components/PdfUploader";
 import ChatComponent from "./components/ChatComponent";
 import RenderQA from "./components/RenderQA";
@@ -56,14 +56,23 @@ const requestSessionClear = async (sessionId) => {
   await axios.delete(`${API_DOMAIN}/sessions/${sessionId}`);
 };
 
+const formatPageCount = (pageCount) => {
+  const parsed = Number.parseInt(pageCount ?? "0", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : "?";
+};
+
+const formatDocumentCount = (count) =>
+  count === 1 ? "1 document" : `${count} documents`;
+
 const App = () => {
   const [conversation, setConversation] = useState([]);
+  const [activeTurnIndex, setActiveTurnIndex] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [activeDocuments, setActiveDocuments] = useState([]);
   const [selectedSource, setSelectedSource] = useState(null);
   const [sessionId, setSessionId] = useState(() => readStoredSessionId());
   const { Content } = Layout;
-  const { Paragraph, Text, Title } = Typography;
+  const { Text } = Typography;
 
   useEffect(() => {
     persistSessionId(sessionId);
@@ -95,9 +104,21 @@ const App = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (conversation.length === 0) {
+      setActiveTurnIndex(null);
+      return;
+    }
+
+    if (activeTurnIndex === null || activeTurnIndex >= conversation.length) {
+      setActiveTurnIndex(conversation.length - 1);
+    }
+  }, [activeTurnIndex, conversation]);
+
   const resetConversationState = () => {
     setConversation([]);
     setSelectedSource(null);
+    setActiveTurnIndex(null);
   };
 
   const rotateSession = async () => {
@@ -114,8 +135,20 @@ const App = () => {
     persistSessionId(nextSessionId);
   };
 
+  const buildPreviewSourceFromDocument = (document, citation = null) => ({
+    docId: document.docId,
+    fileName: document.fileName,
+    filePath: citation?.filePath || document.publicFilePath || "",
+    pageNumber: citation?.pageNumber ?? 1,
+    excerpt: citation?.excerpt ?? "",
+    chunkIndex: citation?.chunkIndex ?? null,
+  });
+
   const handleResp = (question, answer) => {
+    const nextTurnIndex = conversation.length;
+
     setConversation((prev) => [...prev, { question, answer }]);
+    setActiveTurnIndex(nextTurnIndex);
     setSelectedSource(answer?.ragSources?.[0] ?? null);
   };
 
@@ -127,7 +160,6 @@ const App = () => {
 
       return [...prev, document];
     });
-    setSelectedSource(null);
   };
 
   const removeDocument = async (docId) => {
@@ -160,115 +192,284 @@ const App = () => {
     }
   };
 
+  const handleSelectTurn = (turnIndex) => {
+    setActiveTurnIndex(turnIndex);
+
+    const selectedTurn = conversation[turnIndex];
+
+    if (!selectedTurn) {
+      return;
+    }
+
+    const turnSources = selectedTurn.answer?.ragSources ?? [];
+    const selectionBelongsToTurn = turnSources.some(
+      (source) =>
+        source.docId === selectedSource?.docId &&
+        source.chunkIndex === selectedSource?.chunkIndex
+    );
+
+    if (!selectionBelongsToTurn) {
+      setSelectedSource(turnSources[0] ?? null);
+    }
+  };
+
   const docIds = activeDocuments.map((document) => document.docId);
   const docLabel =
     activeDocuments.length === 1
       ? activeDocuments[0].fileName
-      : `${activeDocuments.length} documents`;
+      : formatDocumentCount(activeDocuments.length);
+  const totalPages = activeDocuments.reduce(
+    (sum, document) => sum + (Number.parseInt(document.pageCount ?? "0", 10) || 0),
+    0
+  );
+  const currentTurn =
+    activeTurnIndex !== null && conversation[activeTurnIndex]
+      ? conversation[activeTurnIndex]
+      : conversation[conversation.length - 1] ?? null;
+  const currentSources = currentTurn?.answer?.ragSources ?? [];
+  const selectedDocId = selectedSource?.docId ?? null;
+
+  const relevantDocuments = [...new Map(
+    currentSources.map((source) => {
+      const matchingDocument = activeDocuments.find(
+        (document) => document.docId === source.docId
+      );
+      const existingEntry = {
+        docId: source.docId,
+        fileName: source.fileName,
+        pageCount: matchingDocument?.pageCount ?? null,
+        pages: [],
+        previewSource: buildPreviewSourceFromDocument(
+          matchingDocument ?? {
+            docId: source.docId,
+            fileName: source.fileName,
+            publicFilePath: source.filePath,
+          },
+          source
+        ),
+      };
+
+      return [source.docId, existingEntry];
+    })
+  ).values()].map((entry) => ({
+    ...entry,
+    pages: [
+      ...new Set(
+        currentSources
+          .filter((source) => source.docId === entry.docId)
+          .map((source) => source.pageNumber)
+          .filter(Boolean)
+      ),
+    ].sort((left, right) => left - right),
+  }));
+
+  const previewStatus = selectedSource
+    ? `${selectedSource.fileName} · page ${selectedSource.pageNumber ?? 1}`
+    : "Choose a citation or relevant document";
 
   return (
     <div className="archive-shell">
       <Layout className="archive-layout">
-        <Content className="archive-content">
-          <header className="archive-header">
-            <div>
-              <div className="archive-mark">Luc1ferxx</div>
-              <Title className="archive-title">Luc1ferxx Archive</Title>
-              <Paragraph className="archive-subtitle">
-                Search your PDFs and compare the answer with live web results.
-              </Paragraph>
-              <div className="archive-status-row">
-                <span className="archive-status-pill">
-                  {activeDocuments.length} documents
+        <Content className="archive-app">
+          <aside className="archive-sidebar">
+            <div className="archive-sidebar-top">
+              <div className="archive-sidebar-title-row">
+                <div className="archive-sidebar-title-group">
+                  <div className="archive-sidebar-kicker">Workspace</div>
+                  <div className="archive-sidebar-title">Document Compare</div>
+                </div>
+
+                <div className="archive-sidebar-count">{activeDocuments.length}</div>
+              </div>
+
+              <div className="archive-sidebar-summary">
+                <span className="archive-sidebar-summary-chip">
+                  {formatDocumentCount(activeDocuments.length)}
                 </span>
-                <span className="archive-status-pill">
-                  {conversation.length} responses
+                <span className="archive-sidebar-summary-chip">
+                  {totalPages} pages indexed
                 </span>
               </div>
             </div>
 
-            <div className="archive-header-meta">
-              <Text className="archive-meta-text">
-                {activeDocuments.length} active
-              </Text>
-              <Button
-                className="archive-secondary-button"
-                onClick={() => void clearDocuments()}
-                disabled={activeDocuments.length === 0}
-              >
-                Clear
-              </Button>
-            </div>
-          </header>
-
-          <section className="archive-grid">
-            <div className="archive-card archive-upload-card">
-              <div className="section-label">Upload</div>
+            <section className="archive-sidebar-section archive-upload-section">
+              <div className="archive-sidebar-section-head">
+                <span className="archive-sidebar-section-title">Upload</span>
+                <span className="archive-sidebar-section-caption">
+                  Add PDFs to the workspace
+                </span>
+              </div>
               <PdfUploader onUploadSuccess={handleUploadSuccess} />
-            </div>
+            </section>
 
-            <div className="archive-card archive-doc-card">
-              <div className="section-label">Documents</div>
+            <section className="archive-sidebar-section archive-context-section">
+              <div className="archive-sidebar-section-head">
+                <span className="archive-sidebar-section-title">
+                  Relevant documents
+                </span>
+                <span className="archive-sidebar-section-caption">
+                  {currentTurn
+                    ? "Files referenced in the active answer"
+                    : "Ask a question to surface related files"}
+                </span>
+              </div>
+
+              {relevantDocuments.length > 0 ? (
+                <div className="relevant-document-list">
+                  {relevantDocuments.map((document) => (
+                    <button
+                      key={document.docId}
+                      type="button"
+                      className={`relevant-document-item ${
+                        selectedDocId === document.docId ? "is-selected" : ""
+                      }`}
+                      aria-pressed={selectedDocId === document.docId}
+                      onClick={() => setSelectedSource(document.previewSource)}
+                    >
+                      <div className="relevant-document-title">{document.fileName}</div>
+                      <div className="relevant-document-meta">
+                        {document.pages.length > 0
+                          ? `Pages ${document.pages.join(", ")}`
+                          : "Page 1"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="archive-empty-state archive-empty-state-compact">
+                  <div className="archive-empty-mark">No relevant documents yet</div>
+                  <div>The current answer has not cited any pages yet.</div>
+                </div>
+              )}
+            </section>
+
+            <section className="archive-sidebar-section archive-doc-section">
+              <div className="archive-sidebar-section-head">
+                <span className="archive-sidebar-section-title">
+                  Workspace documents
+                </span>
+                <span className="archive-sidebar-section-caption">
+                  {formatDocumentCount(activeDocuments.length)}
+                </span>
+              </div>
 
               {activeDocuments.length > 0 ? (
                 <div className="document-list">
                   {activeDocuments.map((document) => (
-                    <Tag
+                    <article
                       key={document.docId}
-                      closable
-                      className="document-pill"
-                      onClose={(event) => {
-                        event.preventDefault();
-                        void removeDocument(document.docId);
-                      }}
+                      className={`document-item ${
+                        selectedDocId === document.docId ? "is-selected" : ""
+                      }`}
                     >
-                      <span className="document-pill-name">{document.fileName}</span>
-                      <span className="document-pill-meta">
-                        {document.pageCount ?? "?"} pages
-                      </span>
-                    </Tag>
+                      <button
+                        type="button"
+                        className={`document-item-main document-item-main-button ${
+                          selectedDocId === document.docId ? "is-selected" : ""
+                        }`}
+                        aria-pressed={selectedDocId === document.docId}
+                        onClick={() =>
+                          setSelectedSource(buildPreviewSourceFromDocument(document))
+                        }
+                      >
+                        <div className="document-item-title">{document.fileName}</div>
+                        <div className="document-item-meta">
+                          {formatPageCount(document.pageCount)} pages · ID{" "}
+                          {document.docId.slice(0, 8)}
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        className="document-item-remove"
+                        aria-label={`Remove ${document.fileName}`}
+                        onClick={() => void removeDocument(document.docId)}
+                      >
+                        ×
+                      </button>
+                    </article>
                   ))}
                 </div>
               ) : (
                 <div className="archive-empty-state">
-                  Add one or more PDFs to start a session.
+                  <div className="archive-empty-mark">No documents yet</div>
+                  <div>Upload at least one PDF to start asking questions.</div>
                 </div>
               )}
-            </div>
-          </section>
+            </section>
 
-          <section className="archive-main-grid">
-            <div className="archive-card archive-conversation-card">
-              <div className="conversation-header">
-                <div className="section-label">Conversation</div>
-                <Text className="archive-meta-text">
-                  {conversation.length} messages
-                </Text>
+            <section className="archive-sidebar-footer">
+              <div className="archive-sidebar-stats">
+                <div className="archive-sidebar-stat">
+                  <span className="archive-meta-label">Responses</span>
+                  <span className="archive-meta-value">{conversation.length}</span>
+                </div>
+                <div className="archive-sidebar-stat">
+                  <span className="archive-meta-label">Pages</span>
+                  <span className="archive-meta-value">{totalPages}</span>
+                </div>
               </div>
-              <RenderQA
-                conversation={conversation}
-                isLoading={isLoading}
-                selectedSource={selectedSource}
-                onSelectSource={setSelectedSource}
-              />
+
+              <Button
+                className="archive-secondary-button archive-sidebar-clear"
+                onClick={() => void clearDocuments()}
+                disabled={activeDocuments.length === 0}
+              >
+                Clear workspace
+              </Button>
+            </section>
+          </aside>
+
+          <section className="archive-preview-column">
+            <div className="archive-main-header archive-preview-header">
+              <div className="section-label">
+                <span className="section-label-title">Preview</span>
+                <span className="section-label-caption">{previewStatus}</span>
+              </div>
             </div>
 
             <div className="archive-card archive-preview-card">
-              <div className="section-label">Preview</div>
               <PdfPreview source={selectedSource} />
             </div>
           </section>
 
-          <div className="archive-composer">
-            <ChatComponent
-              docIds={docIds}
-              docLabel={docLabel}
-              sessionId={sessionId}
-              handleResp={handleResp}
-              isLoading={isLoading}
-              setIsLoading={setIsLoading}
-            />
-          </div>
+          <section className="archive-main">
+            <div className="archive-main-header">
+              <div className="section-label">
+                <span className="section-label-title">Conversation</span>
+                <span className="section-label-caption">
+                  {activeDocuments.length > 0
+                    ? `Working with ${docLabel}`
+                    : "Upload a PDF to get started"}
+                </span>
+              </div>
+              <Text className="archive-meta-text">
+                {conversation.length} recorded turns
+              </Text>
+            </div>
+
+            <div className="archive-card archive-conversation-card">
+              <RenderQA
+                conversation={conversation}
+                activeTurnIndex={activeTurnIndex}
+                isLoading={isLoading}
+                selectedSource={selectedSource}
+                onSelectSource={setSelectedSource}
+                onSelectTurn={handleSelectTurn}
+              />
+            </div>
+
+            <div className="archive-composer">
+              <ChatComponent
+                docIds={docIds}
+                docLabel={docLabel}
+                sessionId={sessionId}
+                handleResp={handleResp}
+                isLoading={isLoading}
+                setIsLoading={setIsLoading}
+              />
+            </div>
+          </section>
         </Content>
       </Layout>
     </div>

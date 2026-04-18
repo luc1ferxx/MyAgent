@@ -33,15 +33,16 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("benefits-2025.pdf")).toBeInTheDocument();
-    expect(screen.getByText("1 documents")).toBeInTheDocument();
+    expect(screen.getByText("Workspace documents")).toBeInTheDocument();
+    expect(screen.getByText("Relevant documents")).toBeInTheDocument();
     expect(axios.get).toHaveBeenCalledWith("http://localhost:5001/documents");
   });
 
   test("removes a document from the UI after delete succeeds", async () => {
     render(<App />);
 
-    const closeButton = await screen.findByLabelText("Close");
-    closeButton.click();
+    const removeButton = await screen.findByLabelText("Remove benefits-2025.pdf");
+    removeButton.click();
 
     await waitFor(() =>
       expect(screen.queryByText("benefits-2025.pdf")).not.toBeInTheDocument()
