@@ -1,58 +1,112 @@
 # Luc1ferxx Archive
 
-Luc1ferxx Archive is a multi-document RAG workspace built with React and Node.js. It is designed for a workflow where users upload multiple PDFs, ask grounded questions against those documents, compare document-backed answers with live web-search results, inspect citations in an inline PDF preview, and switch into a compare-aware retrieval path when the query is asking for differences or agreements across documents.
+Luc1ferxx Archive is a multi-document RAG workspace built with React and Node.js. Users can upload PDFs, ask grounded questions, compare multiple documents, inspect citations in an inline PDF preview, and contrast document answers with a live web-search answer.
 
-What makes this project more than a basic LangChain demo is that LangChain is used as the infrastructure layer, while the retrieval and product logic are customized on top of it. The backend keeps LangChain for PDF loading, embeddings, and prompt orchestration, but adds its own persisted vector index, hierarchical chunking, compare-aware retrieval, evidence alignment, confidence gating, resumable uploads, and evaluation harnesses.
+The project uses LangChain as the infrastructure layer for PDF loading, embeddings, and model calls, while the retrieval, comparison, confidence, upload, and evaluation logic are custom.
 
-## What The System Does
+## What It Does
 
-This project lets a user upload one or more PDF files, ask document-grounded questions, inspect citations with file name and page number, preview the cited page inside the app, and compare document answers with a second answer generated from live web search results. It also supports a voice mode so the user can ask questions through speech input and hear the document-backed answer read aloud.
+- Upload one or more PDFs with resumable chunked upload
+- Ask document-grounded questions with citations
+- Compare multiple documents with a dedicated compare-aware retrieval path
+- Preview cited pages inside the app
+- Run a second answer path from live web search through MCP
+- Persist documents, vector data, and session memory across restarts
 
-The document answer path and the web answer path run in parallel. The document path is optimized for grounded retrieval over the uploaded PDFs, while the web path uses a local MCP server backed by SerpAPI to summarize live search results. This separation makes it easy to contrast "what the uploaded documents say" against "what current web results say."
+## Flow
 
-## Core Flow
+```mermaid
+flowchart TD
+  subgraph Upload["Upload / Ingest"]
+    A[User uploads PDFs] --> B[Chunked resumable upload]
+    B --> C[PDFLoader]
+    C --> D[Structured chunker]
+    D --> E[Embeddings]
+    E --> F[Local store or Qdrant]
+  end
 
-The upload flow starts in the browser. A PDF is sliced into binary upload chunks so the frontend can support resumable upload behavior. The backend receives those upload chunks, stores them in an upload session, and merges them back into a complete PDF when all parts arrive. Only after the file is reconstructed does the ingestion pipeline begin.
+  subgraph Ask["Ask / Compare"]
+    G[User question] --> H[Route query]
+    H --> I[QA path]
+    H --> J[Compare path]
+    H --> K[Web answer path]
 
-The ingestion pipeline reads the reconstructed PDF with LangChain's `PDFLoader`, extracts page text, and passes each page through a custom chunker. The chunker preserves page-level structure and then splits content using headings, paragraphs, and sentence boundaries instead of relying on a plain fixed-character splitter. Each resulting chunk keeps metadata such as `docId`, `fileName`, `pageNumber`, `chunkIndex`, and `sectionHeading`. The chunks are then embedded with OpenAI embeddings and written into a persisted local vector index so the corpus survives backend restarts.
+    I --> I1[Global retrieval]
+    I1 --> I2[Confidence gate]
+    I2 --> I3[GPT-5 grounded answer]
 
-When the user asks a question, the backend first normalizes the selected `docIds` and verifies that those documents exist. It then routes the query into either a normal QA path or a compare path. The route decision is currently rule-based and uses comparison signals such as `compare`, `difference`, `vs`, `similar`, and `conflict`.
+    J --> J1[Per-document retrieval]
+    J1 --> J2[Evidence alignment + comparison analysis]
+    J2 --> J3[No-diff short-circuit or GPT-5 compare]
 
-In the normal QA path, the system embeds the query, retrieves the top document chunks across the selected PDFs, runs a confidence gate, and, if enough grounded evidence exists, builds a prompt and asks GPT-5 to generate a concise grounded answer with citations.
+    K --> K1[MCP search tool]
+    K1 --> K2[GPT-5 web summary]
+  end
 
-In the compare path, the system does not simply retrieve a global top-k across all documents. Instead, it retrieves evidence per document, checks confidence across the selected documents, aligns evidence across documents, analyzes the comparison structure, and only then decides whether to short-circuit a "no evidence-backed material difference" response or ask GPT-5 to write a structured comparison. The final answer is organized into sections such as summary, per-document findings, agreements, differences, and uncertainty.
+  I3 --> L[Answer + citations]
+  J3 --> L
+  K2 --> L
+```
 
-## Why This Project Is Interesting
+## Core RAG Logic
 
-The project is intentionally built around a common failure mode of standard RAG systems: multi-document comparison. A typical RAG pipeline often performs a global top-k retrieval across all chunks, which makes it easy for one document to dominate the retrieved evidence. That behavior is acceptable for single-document QA, but it becomes unreliable for comparison tasks because the answer can look like a comparison while actually reflecting only one document.
+### QA
 
-This project addresses that problem by routing comparison questions into a dedicated compare-aware retrieval path. Instead of treating all chunks as one flat pool, it retrieves evidence per document, preserves document identity through the pipeline, and constructs a structured comparison prompt from aligned evidence. This makes the behavior easier to explain, easier to debug, and easier to evaluate than a naive "retrieve then hope the model compares correctly" design.
+1. Embed the user query
+2. Retrieve top chunks across the selected documents
+3. Run a confidence gate
+4. Ask GPT-5 for a concise grounded answer with citations
 
-## Custom Logic On Top Of LangChain
+### Compare
 
-LangChain is used here as the infrastructure layer. `PDFLoader` handles PDF parsing, `Document` objects provide a normalized document abstraction, `OpenAIEmbeddings` handles embedding requests, `ChatOpenAI` handles the final generation call, and `PromptTemplate` plus `ChatPromptTemplate` organize prompts.
+1. Embed the user query once
+2. Retrieve evidence per document instead of global top-k
+3. Align evidence across documents
+4. Analyze shared terms, near-duplicate signals, and evidence balance
+5. If all evidence is highly similar and conflict-free, short-circuit to a deterministic no-difference answer
+6. Otherwise ask GPT-5 to write a structured comparison
 
-The custom logic in this repository is the part that makes the project distinctive. The custom chunker uses page, heading, paragraph, and sentence structure to produce more stable retrieval units. The query router recognizes comparison-style questions and switches retrieval mode. The compare retriever preserves fairness across documents by retrieving per document instead of performing only a global ranking, and the per-document retrieval step now runs in parallel to reduce compare latency. The evidence aligner organizes retrieved evidence into a document-aware comparison bundle, and the comparison analyzer can short-circuit highly similar, conflict-free compare cases before the system falls back to GPT-5. The confidence layer decides whether the evidence is strong enough to answer or compare reliably. The upload subsystem adds chunked upload and resumable upload behavior that is independent of LangChain.
+### Web Answer
 
-## Current Feature Set
+1. Call a local MCP server
+2. Use SerpAPI-backed search results
+3. Ask GPT-5 to summarize the web evidence separately from the document answer
 
-The frontend supports multi-document upload, persisted document reloading, document deletion and clearing, question asking, voice input, TTS playback, side-by-side document and web answers, citation display, and inline PDF preview. The backend supports resumable uploads, persisted document and session state, compare-aware document retrieval, a near-duplicate no-difference guard for highly similar compare evidence, synthetic evaluation, a real-document evaluation entry point, and a local MCP-powered search path for live web answers.
+## Why This Design
 
-The current local defaults are `text-embedding-3-small` for embeddings, `gpt-5` for answer generation, `v3` for the prompt version, `local` for the vector store provider, `structured` for the chunking strategy, `false` for hybrid retrieval, `900` for chunk size, `180` for chunk overlap, `6` for global retrieval top-k, `8` for sparse retrieval top-k, `3` for compare retrieval top-k per document, `0.32` for the minimum relevance score gate, `0.51` for the minimum query-term coverage gate, and `true` for the near-duplicate compare guard. These values can be changed through `server/.env`.
+- Standard RAG often fails on multi-document comparison because one document can dominate global top-k retrieval
+- This project routes comparison questions into a dedicated per-document retrieval path
+- Evidence stays document-aware through the full compare pipeline
+- Confidence gates reduce low-evidence answers
+- A near-duplicate no-difference guard reduces unnecessary compare hallucinations on highly similar documents
 
-## Repository Structure
+## Main Features
 
-The frontend lives under `src/` and provides the upload interface, conversation UI, citation rendering, and PDF preview. The backend lives under `server/` and includes the Express API, the resumable upload subsystem, the RAG pipeline, and the MCP search integration. The custom RAG pipeline is organized under `server/rag/`, while the evaluation harness lives under `server/evaluation/`.
+- Structured chunking using page, heading, paragraph, and sentence boundaries
+- Local persisted vector index with optional Qdrant backend
+- Optional hybrid retrieval with dense + sparse fusion
+- Compare-aware retrieval that preserves document fairness
+- Evidence alignment before comparison generation
+- Resumable uploads with saved chunk state
+- Synthetic and real-corpus evaluation harnesses
+
+## Repository Layout
+
+- `src/`: React frontend
+- `server/`: Express backend
+- `server/rag/`: custom RAG pipeline
+- `server/evaluation/`: synthetic and real evaluation harnesses
+- `server/mcp-server.js`: local MCP search server
 
 ## Setup
 
-Install the frontend dependencies from the repository root.
+Install frontend dependencies from the repo root:
 
 ```powershell
 cmd /c npm.cmd install
 ```
 
-Install the backend dependencies from the `server` directory.
+Install backend dependencies:
 
 ```powershell
 cd server
@@ -60,138 +114,88 @@ cmd /c npm.cmd install
 cd ..
 ```
 
-Create `server/.env` from `server/.env.example` and fill in the required keys.
+Create `server/.env` from `server/.env.example` and fill in the required keys:
 
 ```env
 OPENAI_API_KEY=your_openai_api_key
 SERPAPI_KEY=your_serpapi_key
 VECTOR_STORE_PROVIDER=local
-QDRANT_URL=http://127.0.0.1:6333
-QDRANT_API_KEY=
-QDRANT_COLLECTION=rag_chunks
-QDRANT_DISTANCE=Cosine
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_CHAT_MODEL=gpt-5
 RAG_PROMPT_VERSION=v3
 RAG_CHUNK_STRATEGY=structured
 RAG_HYBRID_ENABLED=false
-RAG_HYBRID_DENSE_WEIGHT=0.65
-RAG_HYBRID_SPARSE_WEIGHT=0.35
 RAG_CHUNK_SIZE=900
 RAG_CHUNK_OVERLAP=180
 RAG_RETRIEVAL_TOP_K=6
 RAG_SPARSE_TOP_K=8
 RAG_COMPARE_TOP_K_PER_DOC=3
+RAG_MIN_RELEVANCE_SCORE=0.32
 RAG_MIN_QUERY_TERM_COVERAGE=0.51
 RAG_NEAR_DUPLICATE_GUARD_ENABLED=true
 ```
 
-`OPENAI_API_KEY` is required for embeddings and answer generation. `SERPAPI_KEY` is required for the web-search answer path. `RAG_PROMPT_VERSION` supports `v1` for the legacy flat-string prompt, `v2` for the `system` plus `human` prompt layout, and `v3` for the structured follow-up rewrite prompt with JSON output. `RAG_NEAR_DUPLICATE_GUARD_ENABLED` controls whether compare answers may short-circuit to a deterministic "no evidence-backed material difference" response when all retrieved evidence is highly similar and conflict-free. `server/.env` is ignored by git and should never be committed.
+Notes:
 
-To enable true hybrid retrieval locally, keep the same chunking pipeline and set:
+- `OPENAI_API_KEY` is required for embeddings and answer generation
+- `SERPAPI_KEY` is required for the MCP web answer path
+- `VECTOR_STORE_PROVIDER` supports `local` and `qdrant`
+- `RAG_NEAR_DUPLICATE_GUARD_ENABLED` controls the no-difference short-circuit on highly similar compare evidence
 
-```env
-RAG_HYBRID_ENABLED=true
-RAG_HYBRID_DENSE_WEIGHT=0.65
-RAG_HYBRID_SPARSE_WEIGHT=0.35
-RAG_SPARSE_TOP_K=8
-```
+## Run
 
-With hybrid retrieval enabled, the backend runs a dense embedding search and a BM25-style sparse search over the same chunks, then fuses the two result sets before confidence gating. Under the local provider those indices are persisted as JSON files. Under the Qdrant provider both dense and sparse vectors are stored in the same Qdrant collection.
-
-To switch the vector store from local JSON persistence to Qdrant, start Qdrant locally and set `VECTOR_STORE_PROVIDER=qdrant`.
-
-```powershell
-docker run -p 6333:6333 qdrant/qdrant
-```
-
-The current Qdrant schema expects one named dense vector (`dense`) and one named sparse vector (`sparse`) per point. If you already have an older `rag_chunks` collection from a previous version of this repository, use a fresh collection name or clear that collection before re-ingesting documents.
-
-## Running The Project
-
-Start the frontend and backend together from the repository root.
+Start frontend and backend together from the repo root:
 
 ```powershell
 cmd /c npm.cmd run dev
 ```
 
-Then open `http://localhost:3000`.
+Default local ports:
 
-The default local ports are `3000` for the React frontend and `5001` for the Express backend.
-
-## API Overview
-
-`GET /documents` lists persisted documents. `DELETE /documents/:docId` removes one document from the registry, vector index, and uploads directory. `POST /documents/clear` clears all persisted documents. `DELETE /sessions/:sessionId` clears persisted follow-up memory for one session. `POST /upload/init` creates or resumes a chunked upload session. `GET /upload/status` returns the uploaded chunk indexes for a given file session. `POST /upload/chunk` accepts one upload chunk. `POST /upload/complete` merges the uploaded chunks into a complete PDF and triggers ingestion. `POST /upload` is still kept as a compatibility endpoint for direct single-file upload. `GET /chat` and `POST /chat` accept `question` plus `docId` or `docIds` and return `ragAnswer`, `ragSources`, `mcpAnswer`, and structured error fields.
+- frontend: `3000`
+- backend: `5001`
 
 ## Evaluation
 
-The repository includes a synthetic evaluation harness under `server/evaluation/`. The script generates a synthetic PDF corpus, simulates resumable upload behavior, ingests the documents, runs QA and comparison cases through the real RAG pipeline, and writes JSON and Markdown reports into `server/evaluation/results/`.
-
-Run the synthetic evaluation with:
+Run the default synthetic evaluation:
 
 ```powershell
 cd server
 cmd /c npm.cmd run eval:synthetic
 ```
 
-Run the expanded 5-document synthetic stress corpus with:
-
-```powershell
-cd server
-cmd /c npm.cmd run eval:synthetic -- evaluation/synthetic-corpus-5docs.json
-```
-
-Run the dedicated chunking comparison corpus with the current structured chunker:
-
-```powershell
-cd server
-cmd /c "set VECTOR_STORE_PROVIDER=local&& set RAG_CHUNK_STRATEGY=structured&& set RAG_CHUNK_OVERLAP=180&& npm.cmd run eval:synthetic -- evaluation/synthetic-corpus-chunking.json"
-```
-
-Run the dedicated near-duplicate compare corpus with the current compare guard:
+Run the near-duplicate compare corpus:
 
 ```powershell
 cd server
 cmd /c "set VECTOR_STORE_PROVIDER=local&& npm.cmd run eval:synthetic -- evaluation/synthetic-corpus-near-duplicate.json"
 ```
 
-Run the chunking comparison baseline with simple fixed-window chunking and no overlap:
+Run the chunking comparison corpus:
 
 ```powershell
 cd server
-cmd /c "set VECTOR_STORE_PROVIDER=local&& set RAG_CHUNK_STRATEGY=simple&& set RAG_CHUNK_OVERLAP=0&& npm.cmd run eval:synthetic -- evaluation/synthetic-corpus-chunking.json"
+cmd /c "set VECTOR_STORE_PROVIDER=local&& set RAG_CHUNK_STRATEGY=structured&& set RAG_CHUNK_OVERLAP=180&& npm.cmd run eval:synthetic -- evaluation/synthetic-corpus-chunking.json"
 ```
 
-Run a real-document evaluation by copying `server/evaluation/real-corpus.example.json` to your own corpus file, replacing the PDF paths and expectations, and then running:
+Run a real-document evaluation:
 
 ```powershell
 cd server
 cmd /c npm.cmd run eval:real -- evaluation/real-corpus.json
 ```
 
-### Optimization Benchmark
+Saved reports are written to `server/evaluation/results/`. The tracked `latest.*` files currently come from the dedicated near-duplicate compare corpus.
 
-The clearest before/after improvement in this branch is the chunking upgrade on `evaluation/synthetic-corpus-chunking.json`. Both runs used the same retrieval top-k and compare top-k; the main change was moving from simple fixed windows with no overlap to the structured chunker with `180` overlap.
+## Current Limits
 
-| Metric | Before: simple `900/0` | After: structured `900/180` |
-| --- | ---: | ---: |
-| Overall pass rate | 0.5 | 1 |
-| QA page hit rate | 0.3333 | 1 |
-| Compare doc coverage | 0.3333 | 1 |
-| Compare page hit rate | 0.3333 | 1 |
-| Answer content hit rate | 0.3333 | 1 |
-| Upload resume success rate | 1 | 1 |
-| Avg response time (ms) | 1310.63 | 3649.63 |
-| Avg citation count | 0.5 | 1.5 |
-
-This tradeoff is intentional. The structured chunker is slower because it keeps more grounded evidence in play, but the accuracy gain on both single-document QA and cross-document comparison is much larger than the latency increase.
-
-The latest tracked saved run in this repository is `server/evaluation/results/latest.*`, currently generated from `evaluation/synthetic-corpus-near-duplicate.json`. It reports an overall pass rate of `0.875`, a QA page hit rate of `1.0`, a compare document coverage rate of `1.0`, a compare page hit rate of `1.0`, an answer content hit rate of `0.8333`, an upload resume success rate of `1.0`, and an abstain accuracy of `1.0`. On that corpus, the compare guard reliably covers the high-similarity no-difference path, while lexical answer matching in QA remains the main source of residual evaluation misses.
-
-## Current Limitations
-
-The compare router is still keyword-based rather than model-based. The default local vector store is optimized for single-user workloads rather than large corpora, while the optional Qdrant provider requires a separately running Qdrant service. Compare responses can still be slower than normal QA when the evidence contains real conflicts, because those paths continue to rely on GPT-5 after per-document retrieval and comparison analysis. The evaluation suite is useful and reproducible, but real-document validation still depends on you supplying your own corpus file and expected evidence.
+- The compare router is still keyword-based
+- Real-conflict compare cases still depend on GPT-5, so they can be slower than QA
+- The local vector store is fine for small workloads, but Qdrant is the better path for larger corpora
+- Real-document evaluation still depends on a user-supplied corpus
 
 ## Security Notes
 
-Do not commit `server/.env`. Do not commit private uploaded documents. The repository already ignores `server/uploads/`, upload logs, and generated evaluation PDFs. Use `server/.env.example` as the public configuration template.
+- Do not commit `server/.env`
+- Do not commit private uploaded documents
+- Use `server/.env.example` as the public config template
