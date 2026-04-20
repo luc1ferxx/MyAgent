@@ -5,6 +5,7 @@ import { access, mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import chat, { ingestDocument } from "../chat.js";
+import { evaluateAnswerExpectation } from "./answer-match.js";
 import {
   getChatModel,
   getChunkOverlap,
@@ -51,25 +52,6 @@ const getResponseAbstained = (response) =>
   typeof response?.abstained === "boolean"
     ? response.abstained
     : detectAbstain(response?.text);
-
-const normalizeAnswerForMatch = (text) =>
-  String(text ?? "")
-    .toLowerCase()
-    .replace(/(\d),(\d)/g, "$1$2")
-    .replace(/\s+/g, " ")
-    .trim();
-
-const evaluateAnswerExpectation = ({ answer, expectedAnswerIncludes }) => {
-  if (!Array.isArray(expectedAnswerIncludes) || expectedAnswerIncludes.length === 0) {
-    return true;
-  }
-
-  const normalizedAnswer = normalizeAnswerForMatch(answer);
-
-  return expectedAnswerIncludes.every((expectedFragment) =>
-    normalizedAnswer.includes(normalizeAnswerForMatch(expectedFragment))
-  );
-};
 
 const summarizeCitations = (citations, docKeyByDocId) =>
   citations.map((citation) => ({

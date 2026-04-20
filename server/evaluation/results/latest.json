@@ -1,7 +1,7 @@
 {
   "summary": {
-    "runId": "2026-04-20T20-18-37-746Z",
-    "createdAt": "2026-04-20T20:20:10.152Z",
+    "runId": "2026-04-20T20-44-01-440Z",
+    "createdAt": "2026-04-20T20:46:03.306Z",
     "corpus": {
       "path": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\synthetic-corpus-near-duplicate.json",
       "documents": 5,
@@ -26,14 +26,14 @@
       "uploadChunkSizeBytes": 180
     },
     "metrics": {
-      "overallPassRate": 0.875,
+      "overallPassRate": 1,
       "qaPageHitRate": 1,
       "compareDocCoverageRate": 1,
       "comparePageHitRate": 1,
       "abstainAccuracy": 1,
-      "answerContentHitRate": 0.8333,
+      "answerContentHitRate": 1,
       "uploadResumeSuccessRate": 1,
-      "averageResponseTimeMs": 11059,
+      "averageResponseTimeMs": 14848.88,
       "averageCitationCount": 1.63,
       "totalSkippedBytesOnResume": 2700
     }
@@ -41,46 +41,46 @@
   "documents": [
     {
       "docKey": "handbook_alpha",
-      "docId": "1305a52f-9867-4c0e-93d5-429da000ae19",
+      "docId": "2c3cf9da-3e00-4083-8a01-4ae3223310d2",
       "fileName": "handbook-alpha.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-alpha.pdf",
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-alpha.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-alpha.pdf",
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-alpha.pdf",
       "pageCount": 2,
       "chunkCount": 2
     },
     {
       "docKey": "handbook_beta",
-      "docId": "b441cd58-8fc7-4028-8ac0-a70a091a12dd",
+      "docId": "e89688cd-5222-4c2f-a5d9-b4fe1d26b476",
       "fileName": "handbook-beta.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-beta.pdf",
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-beta.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-beta.pdf",
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-beta.pdf",
       "pageCount": 2,
       "chunkCount": 2
     },
     {
       "docKey": "handbook_gamma",
-      "docId": "af52604d-b8bb-42c0-9054-2e20ac1842fa",
+      "docId": "d8612da8-23c8-47ab-9734-cfb27b411145",
       "fileName": "handbook-gamma.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-gamma.pdf",
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-gamma.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-gamma.pdf",
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-gamma.pdf",
       "pageCount": 2,
       "chunkCount": 2
     },
     {
       "docKey": "handbook_epsilon",
-      "docId": "d6d2c0e4-62f9-4bc5-bec7-75d44ee6f6b3",
+      "docId": "af4e98c8-6ec1-4100-b553-d12162406a74",
       "fileName": "handbook-epsilon.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-epsilon.pdf",
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-epsilon.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-epsilon.pdf",
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-epsilon.pdf",
       "pageCount": 2,
       "chunkCount": 2
     },
     {
       "docKey": "travel_manual",
-      "docId": "39c45390-e7d8-469a-be0c-75be51c05403",
+      "docId": "cccc3013-5f69-43a5-9e8b-e2e9a5835dff",
       "fileName": "travel-manual.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\travel-manual.pdf",
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\travel-manual.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\travel-manual.pdf",
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\travel-manual.pdf",
       "pageCount": 2,
       "chunkCount": 2
     }
@@ -88,7 +88,7 @@
   "uploads": [
     {
       "fileName": "handbook-alpha.pdf",
-      "fileId": "synthetic-0-0fbb1d54-34ab-4b56-8617-6d17f84fae0e",
+      "fileId": "synthetic-0-bc88eabc-ff37-4ce9-8c86-288bbd86364c",
       "totalBytes": 1108,
       "totalChunks": 7,
       "chunkSizeBytes": 180,
@@ -101,12 +101,12 @@
       "skippedBytesOnResume": 540,
       "resumedBytesUploaded": 568,
       "mergedMatchesOriginal": true,
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-alpha.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-alpha.pdf"
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-alpha.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-alpha.pdf"
     },
     {
       "fileName": "handbook-beta.pdf",
-      "fileId": "synthetic-1-978501d2-8741-475e-9b9a-653f66320fe5",
+      "fileId": "synthetic-1-b13505ce-bf9d-40bc-9ff5-1125bd66629f",
       "totalBytes": 1108,
       "totalChunks": 7,
       "chunkSizeBytes": 180,
@@ -119,12 +119,12 @@
       "skippedBytesOnResume": 540,
       "resumedBytesUploaded": 568,
       "mergedMatchesOriginal": true,
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-beta.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-beta.pdf"
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-beta.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-beta.pdf"
     },
     {
       "fileName": "handbook-gamma.pdf",
-      "fileId": "synthetic-2-1e4dc97a-1b90-400d-a8c9-368b5ab0f18d",
+      "fileId": "synthetic-2-a8174f4f-c961-4449-8997-3477fa1f97fb",
       "totalBytes": 1108,
       "totalChunks": 7,
       "chunkSizeBytes": 180,
@@ -137,12 +137,12 @@
       "skippedBytesOnResume": 540,
       "resumedBytesUploaded": 568,
       "mergedMatchesOriginal": true,
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-gamma.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-gamma.pdf"
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-gamma.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-gamma.pdf"
     },
     {
       "fileName": "handbook-epsilon.pdf",
-      "fileId": "synthetic-3-6adf4786-b343-405c-bf37-a9c114a2f1e7",
+      "fileId": "synthetic-3-c5baaaf0-8234-4416-b85d-d24fdcfda535",
       "totalBytes": 1108,
       "totalChunks": 7,
       "chunkSizeBytes": 180,
@@ -155,12 +155,12 @@
       "skippedBytesOnResume": 540,
       "resumedBytesUploaded": 568,
       "mergedMatchesOriginal": true,
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\handbook-epsilon.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\handbook-epsilon.pdf"
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\handbook-epsilon.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\handbook-epsilon.pdf"
     },
     {
       "fileName": "travel-manual.pdf",
-      "fileId": "synthetic-4-25e14b10-fdde-4800-919d-18f573ea2834",
+      "fileId": "synthetic-4-092981a0-2d5f-4b09-aa86-876e3e72c9e0",
       "totalBytes": 1052,
       "totalChunks": 6,
       "chunkSizeBytes": 180,
@@ -173,8 +173,8 @@
       "skippedBytesOnResume": 540,
       "resumedBytesUploaded": 512,
       "mergedMatchesOriginal": true,
-      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\merged\\travel-manual.pdf",
-      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-18-37-746Z\\source\\travel-manual.pdf"
+      "mergedFilePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\merged\\travel-manual.pdf",
+      "sourcePath": "C:\\Users\\Jxx\\Desktop\\agentai\\server\\evaluation\\generated\\2026-04-20T20-44-01-440Z\\source\\travel-manual.pdf"
     }
   ],
   "cases": [
@@ -190,15 +190,15 @@
       "abstainReason": null,
       "docCoverageHit": true,
       "pageCoverageHit": true,
-      "answerExpectationHit": false,
-      "passed": false,
-      "responseTimeMs": 3392,
+      "answerExpectationHit": true,
+      "passed": true,
+      "responseTimeMs": 7924,
       "citationCount": 1,
-      "answer": "- Employees may work remotely two days per week with manager approval [Source 1].  \n- Security checklists must be completed before each remote day [Source 1].",
+      "answer": "Employees may work remotely 2 days per week with manager approval [Source 1].  \nSecurity checklists must be completed before each remote day [Source 1].",
       "citations": [
         {
           "rank": 1,
-          "docId": "1305a52f-9867-4c0e-93d5-429da000ae19",
+          "docId": "2c3cf9da-3e00-4083-8a01-4ae3223310d2",
           "docKey": "handbook_alpha",
           "fileName": "handbook-alpha.pdf",
           "pageNumber": 1,
@@ -221,13 +221,13 @@
       "pageCoverageHit": true,
       "answerExpectationHit": true,
       "passed": true,
-      "responseTimeMs": 5812,
+      "responseTimeMs": 5267,
       "citationCount": 1,
-      "answer": "The badge renewal window is every 14 months after the last successful audit [Source 1].",
+      "answer": "The badge renewal window is every 14 months after the last successful audit. [Source 1]",
       "citations": [
         {
           "rank": 1,
-          "docId": "af52604d-b8bb-42c0-9054-2e20ac1842fa",
+          "docId": "d8612da8-23c8-47ab-9734-cfb27b411145",
           "docKey": "handbook_gamma",
           "fileName": "handbook-gamma.pdf",
           "pageNumber": 2,
@@ -251,13 +251,13 @@
       "pageCoverageHit": true,
       "answerExpectationHit": true,
       "passed": true,
-      "responseTimeMs": 335,
+      "responseTimeMs": 337,
       "citationCount": 2,
       "answer": "Summary:\nNo evidence-backed material differences were found across the selected documents based on the retrieved evidence. [Source 1] [Source 2]\nPer document:\n- handbook-alpha.pdf: The retrieved evidence is highly similar to the matching evidence from the other selected documents. [Source 1]\n- handbook-beta.pdf: The retrieved evidence is highly similar to the matching evidence from the other selected documents. [Source 2]\nAgreements:\n- The retrieved passages align on the queried topic across the selected documents. [Source 1] [Source 2]\nDifferences:\n- No evidence-backed material differences were found in the retrieved passages.\nGaps or uncertainty:\n- This conclusion is limited to the retrieved passages and may miss uncited sections elsewhere in the documents.",
       "citations": [
         {
           "rank": 1,
-          "docId": "1305a52f-9867-4c0e-93d5-429da000ae19",
+          "docId": "2c3cf9da-3e00-4083-8a01-4ae3223310d2",
           "docKey": "handbook_alpha",
           "fileName": "handbook-alpha.pdf",
           "pageNumber": 1,
@@ -266,7 +266,7 @@
         },
         {
           "rank": 2,
-          "docId": "b441cd58-8fc7-4028-8ac0-a70a091a12dd",
+          "docId": "e89688cd-5222-4c2f-a5d9-b4fe1d26b476",
           "docKey": "handbook_beta",
           "fileName": "handbook-beta.pdf",
           "pageNumber": 1,
@@ -291,13 +291,13 @@
       "pageCoverageHit": true,
       "answerExpectationHit": true,
       "passed": true,
-      "responseTimeMs": 134,
+      "responseTimeMs": 385,
       "citationCount": 3,
       "answer": "Summary:\nNo evidence-backed material differences were found across the selected documents based on the retrieved evidence. [Source 1] [Source 2] [Source 3]\nPer document:\n- handbook-alpha.pdf: The retrieved evidence is highly similar to the matching evidence from the other selected documents. [Source 1]\n- handbook-beta.pdf: The retrieved evidence is highly similar to the matching evidence from the other selected documents. [Source 2]\n- handbook-epsilon.pdf: The retrieved evidence is highly similar to the matching evidence from the other selected documents. [Source 3]\nAgreements:\n- The retrieved passages align on the queried topic across the selected documents. [Source 1] [Source 2] [Source 3]\nDifferences:\n- No evidence-backed material differences were found in the retrieved passages.\nGaps or uncertainty:\n- This conclusion is limited to the retrieved passages and may miss uncited sections elsewhere in the documents.",
       "citations": [
         {
           "rank": 1,
-          "docId": "1305a52f-9867-4c0e-93d5-429da000ae19",
+          "docId": "2c3cf9da-3e00-4083-8a01-4ae3223310d2",
           "docKey": "handbook_alpha",
           "fileName": "handbook-alpha.pdf",
           "pageNumber": 1,
@@ -306,7 +306,7 @@
         },
         {
           "rank": 2,
-          "docId": "b441cd58-8fc7-4028-8ac0-a70a091a12dd",
+          "docId": "e89688cd-5222-4c2f-a5d9-b4fe1d26b476",
           "docKey": "handbook_beta",
           "fileName": "handbook-beta.pdf",
           "pageNumber": 1,
@@ -315,7 +315,7 @@
         },
         {
           "rank": 3,
-          "docId": "d6d2c0e4-62f9-4bc5-bec7-75d44ee6f6b3",
+          "docId": "af4e98c8-6ec1-4100-b553-d12162406a74",
           "docKey": "handbook_epsilon",
           "fileName": "handbook-epsilon.pdf",
           "pageNumber": 1,
@@ -339,13 +339,13 @@
       "pageCoverageHit": true,
       "answerExpectationHit": true,
       "passed": true,
-      "responseTimeMs": 52481,
+      "responseTimeMs": 41932,
       "citationCount": 2,
-      "answer": "Summary:\n- Both policies require manager approval for remote work and mandate completing security checklists before each remote day; they differ on the number of remote days allowed per week (2 vs 3) [Source 1][Source 2].\n\nPer document:\n- handbook-alpha.pdf: Remote work allowed 2 days per week with manager approval; security checklists required before each remote day [Source 1].\n- handbook-gamma.pdf: Remote work allowed 3 days per week with manager approval; security checklists required before each remote day [Source 2].\n\nAgreements:\n- Manager approval is required for remote work [Source 1][Source 2].\n- Security checklists must be completed before each remote day [Source 1][Source 2].\n\nDifferences:\n- Number of remote days allowed per week: 2 days (handbook-alpha.pdf) vs 3 days (handbook-gamma.pdf) [Source 1][Source 2].\n\nGaps or uncertainty:\n- None apparent for the elements shown; both specify limits, approval, and checklist requirements clearly [Source 1][Source 2].\n- Scope is limited to the provided excerpts; other potential conditions (e.g., eligibility, equipment, locations) are not shown and cannot be compared.",
+      "answer": "Summary:\n- Both policies allow remote work with manager approval and require completion of security checklists before each remote day; handbook-alpha limits remote work to 2 days/week, while handbook-gamma allows 3 days/week [Source 1][Source 2].\n\nPer document:\n- handbook-alpha.pdf:\n  - Remote work permitted up to 2 days per week with manager approval [Source 1].\n  - Security checklists must be completed before each remote day [Source 1].\n- handbook-gamma.pdf:\n  - Remote work permitted up to 3 days per week with manager approval [Source 2].\n  - Security checklists must be completed before each remote day [Source 2].\n\nAgreements:\n- Manager approval is required for remote work [Source 1][Source 2].\n- Security checklists must be completed before each remote day [Source 1][Source 2].\n\nDifferences:\n- Allowed remote days per week: 2 days (handbook-alpha.pdf) vs 3 days (handbook-gamma.pdf) [Source 1][Source 2].\n\nGaps or uncertainty:\n- The provided evidence does not specify eligibility criteria, detailed approval workflow, geographic/location restrictions, equipment or expense support, work hours/availability expectations, exception processes, or the content/enforcement of the security checklists.",
       "citations": [
         {
           "rank": 1,
-          "docId": "1305a52f-9867-4c0e-93d5-429da000ae19",
+          "docId": "2c3cf9da-3e00-4083-8a01-4ae3223310d2",
           "docKey": "handbook_alpha",
           "fileName": "handbook-alpha.pdf",
           "pageNumber": 1,
@@ -354,7 +354,7 @@
         },
         {
           "rank": 2,
-          "docId": "af52604d-b8bb-42c0-9054-2e20ac1842fa",
+          "docId": "d8612da8-23c8-47ab-9734-cfb27b411145",
           "docKey": "handbook_gamma",
           "fileName": "handbook-gamma.pdf",
           "pageNumber": 1,
@@ -379,13 +379,13 @@
       "pageCoverageHit": true,
       "answerExpectationHit": true,
       "passed": true,
-      "responseTimeMs": 25874,
+      "responseTimeMs": 62476,
       "citationCount": 3,
-      "answer": "Summary:\n- All three policies require manager approval and completion of security checklists before each remote day [Source 1][Source 2][Source 3].\n- Allowed remote days differ: handbook-alpha and handbook-beta allow 2 days/week; handbook-gamma allows 3 days/week [Source 1][Source 2][Source 3].\n\nPer document:\n- handbook-alpha: Up to 2 remote days per week with manager approval; security checklists required before each remote day [Source 1].\n- handbook-beta: Up to 2 remote days per week with manager approval; security checklists required before each remote day [Source 2].\n- handbook-gamma: Up to 3 remote days per week with manager approval; security checklists required before each remote day [Source 3].\n\nAgreements:\n- Manager approval is required for remote work in all three documents [Source 1][Source 2][Source 3].\n- Security checklists must be completed before each remote day in all three documents [Source 1][Source 2][Source 3].\n\nDifferences:\n- Maximum remote days per week: handbook-alpha and handbook-beta allow 2 days; handbook-gamma allows 3 days [Source 1][Source 2][Source 3].\n- No other differences are evident in the provided excerpts.\n\nGaps or uncertainty:\n- The excerpts do not provide details on eligibility criteria, equipment or stipend support, working hours expectations, location restrictions, or exception processes.",
+      "answer": "Summary:\n- handbook-alpha.pdf and handbook-beta.pdf are identical: remote work allowed 2 days/week with manager approval, and security checklists are required before each remote day [Source 1] [Source 2].\n- handbook-gamma.pdf matches on approval and checklists but allows 3 days/week instead of 2 [Source 3].\n\nPer document:\n- handbook-alpha.pdf: Remote work up to 2 days/week with manager approval; security checklists required before each remote day [Source 1].\n- handbook-beta.pdf: Remote work up to 2 days/week with manager approval; security checklists required before each remote day [Source 2].\n- handbook-gamma.pdf: Remote work up to 3 days/week with manager approval; security checklists required before each remote day [Source 3].\n\nAgreements:\n- Manager approval is required for remote work in all three documents [Source 1] [Source 2] [Source 3].\n- Security checklists must be completed before each remote day in all three documents [Source 1] [Source 2] [Source 3].\n\nDifferences:\n- Allowed remote days per week: Alpha and Beta allow 2 days/week [Source 1] [Source 2]; Gamma allows 3 days/week [Source 3].\n\nGaps or uncertainty:\n- The excerpts do not specify details beyond days/week, manager approval, and security checklists (e.g., role eligibility, equipment/expense policies, or location restrictions).\n- No documents lack strong evidence in the provided excerpts.",
       "citations": [
         {
           "rank": 1,
-          "docId": "1305a52f-9867-4c0e-93d5-429da000ae19",
+          "docId": "2c3cf9da-3e00-4083-8a01-4ae3223310d2",
           "docKey": "handbook_alpha",
           "fileName": "handbook-alpha.pdf",
           "pageNumber": 1,
@@ -394,7 +394,7 @@
         },
         {
           "rank": 2,
-          "docId": "b441cd58-8fc7-4028-8ac0-a70a091a12dd",
+          "docId": "e89688cd-5222-4c2f-a5d9-b4fe1d26b476",
           "docKey": "handbook_beta",
           "fileName": "handbook-beta.pdf",
           "pageNumber": 1,
@@ -403,7 +403,7 @@
         },
         {
           "rank": 3,
-          "docId": "af52604d-b8bb-42c0-9054-2e20ac1842fa",
+          "docId": "d8612da8-23c8-47ab-9734-cfb27b411145",
           "docKey": "handbook_gamma",
           "fileName": "handbook-gamma.pdf",
           "pageNumber": 1,
@@ -426,7 +426,7 @@
       "pageCoverageHit": true,
       "answerExpectationHit": true,
       "passed": true,
-      "responseTimeMs": 256,
+      "responseTimeMs": 181,
       "citationCount": 0,
       "answer": "I couldn't find enough grounded evidence in the uploaded documents to answer reliably.",
       "citations": []
@@ -446,13 +446,13 @@
       "pageCoverageHit": true,
       "answerExpectationHit": true,
       "passed": true,
-      "responseTimeMs": 188,
+      "responseTimeMs": 289,
       "citationCount": 1,
       "answer": "I only found strong evidence in 1 of the 2 selected documents, so the comparison would be unreliable.",
       "citations": [
         {
           "rank": 1,
-          "docId": "1305a52f-9867-4c0e-93d5-429da000ae19",
+          "docId": "2c3cf9da-3e00-4083-8a01-4ae3223310d2",
           "docKey": "handbook_alpha",
           "fileName": "handbook-alpha.pdf",
           "pageNumber": 1,

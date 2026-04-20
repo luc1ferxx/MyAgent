@@ -210,13 +210,13 @@ This tradeoff is intentional: the structured chunker is slower, but it keeps bet
 
 The current tracked `latest.*` report comes from `evaluation/synthetic-corpus-near-duplicate.json` and reports:
 
-- `overallPassRate`: `0.875`
+- `overallPassRate`: `1.0`
 - `qaPageHitRate`: `1.0`
 - `compareDocCoverageRate`: `1.0`
 - `comparePageHitRate`: `1.0`
 - `abstainAccuracy`: `1.0`
-- `answerContentHitRate`: `0.8333`
-- `averageResponseTimeMs`: `11059`
+- `answerContentHitRate`: `1.0`
+- `averageResponseTimeMs`: `14848.88`
 - `averageCitationCount`: `1.63`
 
 ## Current Limits
