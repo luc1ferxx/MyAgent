@@ -4,8 +4,15 @@ import { randomUUID } from "crypto";
 import { access, mkdir, readFile, writeFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import chat, { ingestDocument } from "../chat.js";
 import { evaluateAnswerExpectation } from "./answer-match.js";
+import { configureEvaluationStores } from "./eval-store-overrides.js";
+import {
+  buildRagasSample,
+  buildReferenceContextsFromPages,
+  summarizeRetrievedContexts,
+} from "./ragas-sample.js";
 import {
   getChatModel,
   getChunkOverlap,
@@ -100,14 +107,35 @@ const average = (values) =>
         ).toFixed(2)
       );
 
-const evaluateCase = async ({ testCase, docIdByKey, docKeyByDocId }) => {
+const loadDocumentPages = async (filePath) => {
+  const loader = new PDFLoader(filePath);
+  const pageDocuments = await loader.load();
+
+  return pageDocuments.map((document) => document.pageContent);
+};
+
+const evaluateCase = async ({
+  testCase,
+  docIdByKey,
+  docKeyByDocId,
+  pagesByDocKey,
+}) => {
   const startedAt = performance.now();
   const response = await chat(
     testCase.docKeys.map((docKey) => docIdByKey.get(docKey)),
-    testCase.question
+    testCase.question,
+    { includeRetrievedContexts: true }
   );
   const durationMs = Math.round(performance.now() - startedAt);
   const citations = summarizeCitations(response.citations ?? [], docKeyByDocId);
+  const retrievedContexts = summarizeRetrievedContexts(
+    response.retrievedContexts,
+    docKeyByDocId
+  );
+  const referenceContexts = buildReferenceContextsFromPages({
+    expectedEvidence: testCase.expectedEvidence,
+    pagesByDocKey,
+  });
   const abstained = getResponseAbstained(response);
   const coverage = evaluateExpectedCoverage({
     citations,
@@ -139,8 +167,18 @@ const evaluateCase = async ({ testCase, docIdByKey, docKeyByDocId }) => {
     passed,
     responseTimeMs: durationMs,
     citationCount: citations.length,
+    resolvedQuery: response.resolvedQuery ?? testCase.question,
+    reference: testCase.referenceAnswer ?? null,
     answer: response.text,
     citations,
+    retrievedContexts,
+    referenceContexts,
+    ragasSample: buildRagasSample({
+      testCase,
+      response,
+      docKeyByDocId,
+      referenceContexts,
+    }),
   };
 };
 
@@ -246,6 +284,7 @@ const main = async () => {
   await mkdir(resultsDirectory, { recursive: true });
   await mkdir(runDirectory, { recursive: true });
 
+  configureEvaluationStores();
   configureRagDataDirectory(ragDataDirectory);
   resetDocumentRegistry();
   resetVectorStore();
@@ -253,11 +292,13 @@ const main = async () => {
 
   const docIdByKey = new Map();
   const docKeyByDocId = new Map();
+  const pagesByDocKey = new Map();
   const documentRecords = [];
 
   for (const documentSpec of corpus.documents ?? []) {
     const docId = randomUUID();
     const filePath = path.resolve(corpusDirectory, documentSpec.filePath);
+    pagesByDocKey.set(documentSpec.key, await loadDocumentPages(filePath));
     const documentRecord = await ingestDocument({
       docId,
       filePath,
@@ -284,6 +325,7 @@ const main = async () => {
         testCase,
         docIdByKey,
         docKeyByDocId,
+        pagesByDocKey,
       })
     );
   }

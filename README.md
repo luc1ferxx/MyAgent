@@ -114,6 +114,15 @@ cmd /c npm.cmd install
 cd ..
 ```
 
+Install optional Python dependencies for `ragas` evaluation:
+
+```powershell
+cd server
+python -m venv evaluation\.venv-ragas
+evaluation\.venv-ragas\Scripts\python.exe -m pip install -r evaluation\ragas-requirements.txt
+cd ..
+```
+
 Create `server/.env` from `server/.env.example` and fill in the required keys:
 
 ```env
@@ -185,7 +194,18 @@ cd server
 cmd /c npm.cmd run eval:real -- evaluation/real-corpus.json
 ```
 
-Saved reports are written to `server/evaluation/results/`. The tracked `latest.*` files currently come from the dedicated near-duplicate compare corpus.
+Run `ragas` against the latest saved Node evaluation:
+
+```powershell
+cd server
+evaluation\.venv-ragas\Scripts\python.exe evaluation\run-ragas-eval.py --input evaluation\results\latest.json
+```
+
+Saved reports are written to `server/evaluation/results/`.
+
+- `latest.json` and `latest.md` come from the Node evaluation harness
+- `latest-ragas.json` and `latest-ragas.md` come from the Python `ragas` pass
+- The Node result payload now includes `retrievedContexts`, `referenceContexts`, and a normalized `ragasSample` per case so `ragas` can score the same run without re-querying the app
 
 ## Quantitative Results
 
@@ -216,8 +236,20 @@ The current tracked `latest.*` report comes from `evaluation/synthetic-corpus-ne
 - `comparePageHitRate`: `1.0`
 - `abstainAccuracy`: `1.0`
 - `answerContentHitRate`: `1.0`
-- `averageResponseTimeMs`: `14848.88`
+- `averageResponseTimeMs`: `7847.88`
 - `averageCitationCount`: `1.63`
+
+### Latest `ragas` Eval
+
+The current tracked `latest-ragas.*` report on the same near-duplicate corpus reports:
+
+- `answerRelevancy`: `0.6039`
+- `faithfulness`: `0.576`
+- `contextUtilization`: `0.6667`
+- `contextPrecision`: `0.8333`
+- `contextRecall`: `0.8889`
+
+This project still treats the custom Node metrics as the source of truth for abstain behavior, page-level evidence coverage, and compare-specific correctness. `ragas` is used as a semantic supplement, especially for QA quality and retrieval grounding, not as a replacement for the compare harness.
 
 ## Current Limits
 

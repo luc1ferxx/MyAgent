@@ -6,6 +6,12 @@ import path from "path";
 import { fileURLToPath } from "url";
 import chat, { ingestDocument } from "../chat.js";
 import { evaluateAnswerExpectation } from "./answer-match.js";
+import { configureEvaluationStores } from "./eval-store-overrides.js";
+import {
+  buildRagasSample,
+  buildReferenceContextsFromPages,
+  summarizeRetrievedContexts,
+} from "./ragas-sample.js";
 import {
   getChatModel,
   getChunkOverlap,
@@ -258,14 +264,28 @@ const runUploadResumeFlow = async ({ buffer, fileName, runDirectory, uploadIndex
   };
 };
 
-const evaluateCase = async ({ testCase, docIdByKey, docKeyByDocId }) => {
+const evaluateCase = async ({
+  testCase,
+  docIdByKey,
+  docKeyByDocId,
+  pagesByDocKey,
+}) => {
   const startedAt = performance.now();
   const response = await chat(
     testCase.docKeys.map((docKey) => docIdByKey.get(docKey)),
-    testCase.question
+    testCase.question,
+    { includeRetrievedContexts: true }
   );
   const durationMs = Math.round(performance.now() - startedAt);
   const citations = summarizeCitations(response.citations ?? [], docKeyByDocId);
+  const retrievedContexts = summarizeRetrievedContexts(
+    response.retrievedContexts,
+    docKeyByDocId
+  );
+  const referenceContexts = buildReferenceContextsFromPages({
+    expectedEvidence: testCase.expectedEvidence,
+    pagesByDocKey,
+  });
   const abstained = getResponseAbstained(response);
   const coverage = evaluateExpectedCoverage({
     citations,
@@ -297,8 +317,18 @@ const evaluateCase = async ({ testCase, docIdByKey, docKeyByDocId }) => {
     passed,
     responseTimeMs: durationMs,
     citationCount: citations.length,
+    resolvedQuery: response.resolvedQuery ?? testCase.question,
+    reference: testCase.referenceAnswer ?? null,
     answer: response.text,
     citations,
+    retrievedContexts,
+    referenceContexts,
+    ragasSample: buildRagasSample({
+      testCase,
+      response,
+      docKeyByDocId,
+      referenceContexts,
+    }),
   };
 };
 
@@ -428,6 +458,7 @@ const main = async () => {
   await mkdir(sourceDirectory, { recursive: true });
   await mkdir(mergedDirectory, { recursive: true });
 
+  configureEvaluationStores();
   configureRagDataDirectory(ragDataDirectory);
   resetDocumentRegistry();
   resetVectorStore();
@@ -437,9 +468,11 @@ const main = async () => {
   const uploadResults = [];
   const docIdByKey = new Map();
   const docKeyByDocId = new Map();
+  const pagesByDocKey = new Map();
   const documentRecords = [];
 
   for (const [index, documentSpec] of corpus.documents.entries()) {
+    pagesByDocKey.set(documentSpec.key, documentSpec.pages ?? []);
     const buffer = buildPdfBuffer(documentSpec.pages);
     const sourcePath = path.join(sourceDirectory, documentSpec.fileName);
 
@@ -484,6 +517,7 @@ const main = async () => {
         testCase,
         docIdByKey,
         docKeyByDocId,
+        pagesByDocKey,
       })
     );
   }

@@ -23,6 +23,7 @@ server/.env
 server/uploads/*
 !server/uploads/.gitkeep
 /.npm-cache/
+/server/evaluation/.venv-ragas/
 
 # misc
 .DS_Store

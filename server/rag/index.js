@@ -247,7 +247,11 @@ export const clearDocuments = async ({ deleteFiles = true } = {}) => {
 };
 
 const chat = async (docIds, query, options = {}) => {
-  const { sessionId = null, userId = null } = options;
+  const {
+    sessionId = null,
+    userId = null,
+    includeRetrievedContexts = false,
+  } = options;
   const normalizedDocIds = normalizeDocIds(docIds);
 
   if (normalizedDocIds.length === 0) {
@@ -291,6 +295,10 @@ const chat = async (docIds, query, options = {}) => {
       resolvedQuery,
       memoryApplied: memoryResolution.memoryApplied,
     };
+
+    if (!includeRetrievedContexts) {
+      delete result.retrievedContexts;
+    }
 
     await recordSessionTurn({
       sessionId,
@@ -347,20 +355,22 @@ const chat = async (docIds, query, options = {}) => {
       return buildResponse({
         text: confidence.reason,
         citations: bundle.citations,
+        retrievedContexts: bundle.retrievedContexts,
         abstained: true,
         abstainReason: confidence.reason,
       });
     }
 
-    return buildResponse(
-      await writeComparisonAnswer({
+    return buildResponse({
+      ...(await writeComparisonAnswer({
         query,
         resolvedQuery,
         bundle,
         analysis,
         preferenceBlock: longMemoryContext.answerBlock,
-      })
-    );
+      })),
+      retrievedContexts: bundle.retrievedContexts,
+    });
   }
 
   const retrievalResults = await retrieveGlobalContext({
@@ -387,6 +397,7 @@ const chat = async (docIds, query, options = {}) => {
     return buildResponse({
       text: gapPlan.userMessage,
       citations: bundle.citations,
+      retrievedContexts: bundle.retrievedContexts,
       abstained: true,
       abstainReason: gapPlan.userMessage,
       gapPlan: {
@@ -396,14 +407,15 @@ const chat = async (docIds, query, options = {}) => {
     });
   }
 
-  return buildResponse(
-    await writeQaAnswer({
+  return buildResponse({
+    ...(await writeQaAnswer({
       query,
       resolvedQuery,
       bundle,
       preferenceBlock: longMemoryContext.answerBlock,
-    })
-  );
+    })),
+    retrievedContexts: bundle.retrievedContexts,
+  });
 };
 
 export default chat;

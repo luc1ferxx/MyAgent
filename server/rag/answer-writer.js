@@ -213,6 +213,20 @@ const formatPairLabels = (pairs) =>
 const formatSourceLabels = (ranks) =>
   ranks.length > 0 ? ranks.map((rank) => `[Source ${rank}]`).join(" ") : "";
 
+const getPageNumber = (metadata = {}) =>
+  metadata.pageNumber ?? metadata.loc?.pageNumber ?? metadata.page ?? null;
+
+const buildRetrievedContextEntry = (result, rank) => ({
+  rank,
+  score: Number((result.score ?? 0).toFixed(4)),
+  docId: result.document.metadata?.docId ?? null,
+  fileName: result.document.metadata?.fileName ?? "Unknown document",
+  pageNumber: getPageNumber(result.document.metadata),
+  chunkIndex: result.document.metadata?.chunkIndex ?? null,
+  sectionHeading: result.document.metadata?.sectionHeading ?? null,
+  text: result.document.pageContent,
+});
+
 const getRanksForDoc = (bundle, docId) =>
   bundle.rankedResults
     .filter((result) => result.document.metadata?.docId === docId)
@@ -301,6 +315,9 @@ export const prepareQASourceBundle = ({ results }) => {
         buildCitation(result.document, result.score, result.rank)
       )
     ),
+    retrievedContexts: rankedResults.map((result) =>
+      buildRetrievedContextEntry(result, result.rank)
+    ),
     context: rankedResults
       .map((result) => buildContextSection(result.document, result.score, result.rank))
       .join("\n\n"),
@@ -371,6 +388,9 @@ export const prepareComparisonSourceBundle = ({ alignment }) => {
       rankedResults.map((result) =>
         buildCitation(result.document, result.score, result.rank)
       )
+    ),
+    retrievedContexts: rankedResults.map((result) =>
+      buildRetrievedContextEntry(result, result.rank)
     ),
     context: alignment.perDocument
       .map((entry) => {
