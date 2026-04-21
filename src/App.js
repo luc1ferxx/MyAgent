@@ -5,51 +5,80 @@ import PdfUploader from "./components/PdfUploader";
 import ChatComponent from "./components/ChatComponent";
 import RenderQA from "./components/RenderQA";
 import PdfPreview from "./components/PdfPreview";
-import { API_DOMAIN } from "./config";
+import { API_DOMAIN, buildApiRequestConfig } from "./config";
 import "./App.css";
 
 const SESSION_STORAGE_KEY = "archive-session-id";
+const USER_STORAGE_KEY = "archive-user-id";
 
-const createSessionId = () =>
+const createStableId = (prefix) =>
   (typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : null) ??
-  `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-const readStoredSessionId = () => {
+const createSessionId = () => createStableId("session");
+
+const createUserId = () => createStableId("user");
+
+const readStoredId = (storageKey, fallbackFactory) => {
   try {
-    const storedSessionId = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    return storedSessionId?.trim() ? storedSessionId : createSessionId();
+    const storedValue = window.localStorage.getItem(storageKey);
+    return storedValue?.trim() ? storedValue : fallbackFactory();
   } catch {
-    return createSessionId();
+    return fallbackFactory();
   }
 };
 
-const persistSessionId = (sessionId) => {
+const readStoredSessionId = () => readStoredId(SESSION_STORAGE_KEY, createSessionId);
+
+const readStoredUserId = () => readStoredId(USER_STORAGE_KEY, createUserId);
+
+const persistStoredId = (storageKey, value) => {
   try {
-    window.localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+    window.localStorage.setItem(storageKey, value);
   } catch {
     // Ignore localStorage failures for browsers with restricted storage access.
   }
 };
 
+const persistSessionId = (sessionId) => persistStoredId(SESSION_STORAGE_KEY, sessionId);
+
+const persistUserId = (userId) => persistStoredId(USER_STORAGE_KEY, userId);
+
 const fetchDocuments = async () => {
-  const response = await axios.get(`${API_DOMAIN}/documents`);
+  const requestConfig = buildApiRequestConfig();
+  const response = requestConfig
+    ? await axios.get(`${API_DOMAIN}/documents`, requestConfig)
+    : await axios.get(`${API_DOMAIN}/documents`);
   return response.data;
 };
 
 const requestDocumentDelete = async (docId) => {
-  const response = await axios.delete(`${API_DOMAIN}/documents/${docId}`);
+  const requestConfig = buildApiRequestConfig();
+  const response = requestConfig
+    ? await axios.delete(`${API_DOMAIN}/documents/${docId}`, requestConfig)
+    : await axios.delete(`${API_DOMAIN}/documents/${docId}`);
   return response.data;
 };
 
 const requestDocumentClear = async () => {
-  const response = await axios.post(`${API_DOMAIN}/documents/clear`);
+  const requestConfig = buildApiRequestConfig();
+  const response = requestConfig
+    ? await axios.post(`${API_DOMAIN}/documents/clear`, undefined, requestConfig)
+    : await axios.post(`${API_DOMAIN}/documents/clear`);
   return response.data;
 };
 
 const requestSessionClear = async (sessionId) => {
   if (!sessionId) {
+    return;
+  }
+
+  const requestConfig = buildApiRequestConfig();
+
+  if (requestConfig) {
+    await axios.delete(`${API_DOMAIN}/sessions/${sessionId}`, requestConfig);
     return;
   }
 
@@ -71,12 +100,17 @@ const App = () => {
   const [activeDocuments, setActiveDocuments] = useState([]);
   const [selectedSource, setSelectedSource] = useState(null);
   const [sessionId, setSessionId] = useState(() => readStoredSessionId());
+  const [userId] = useState(() => readStoredUserId());
   const { Content } = Layout;
   const { Text } = Typography;
 
   useEffect(() => {
     persistSessionId(sessionId);
   }, [sessionId]);
+
+  useEffect(() => {
+    persistUserId(userId);
+  }, [userId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -464,6 +498,7 @@ const App = () => {
                 docIds={docIds}
                 docLabel={docLabel}
                 sessionId={sessionId}
+                userId={userId}
                 handleResp={handleResp}
                 isLoading={isLoading}
                 setIsLoading={setIsLoading}

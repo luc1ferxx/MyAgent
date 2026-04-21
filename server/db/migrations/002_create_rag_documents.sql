@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS __DOCUMENTS_TABLE__ (
+  doc_id TEXT PRIMARY KEY,
+  file_name TEXT NOT NULL,
+  mime_type TEXT NOT NULL DEFAULT 'application/pdf',
+  file_size BIGINT NOT NULL DEFAULT 0,
+  file_bytes BYTEA NOT NULL,
+  chunk_count INTEGER NOT NULL DEFAULT 0,
+  page_count INTEGER NOT NULL DEFAULT 0,
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS __DOCUMENTS_TABLE___uploaded_at_idx
+  ON __DOCUMENTS_TABLE__ (uploaded_at DESC);

@@ -1,6 +1,6 @@
 import test, { afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import chat, {
@@ -8,21 +8,34 @@ import chat, {
   getDocument,
   ingestDocumentPages,
 } from "../chat.js";
+import { buildPublicFilePath } from "../rag/document-utils.js";
 import { configureOpenAIProvider, resetOpenAIProvider } from "../rag/openai.js";
 import { configureRagDataDirectory, getRagDataDirectory } from "../rag/storage.js";
-import { resetDocumentRegistry } from "../rag/doc-registry.js";
+import {
+  configureDocumentRegistryStore,
+  resetDocumentRegistry,
+  resetDocumentRegistryStore,
+} from "../rag/doc-registry.js";
 import { resetVectorStore } from "../rag/vector-store.js";
 import {
   configureQdrantClientFactory,
   resetQdrantClientFactory,
 } from "../rag/vector-store-qdrant.js";
 import {
+  configureSessionMemoryStore,
   recordSessionTurn,
   resetSessionMemory,
+  resetSessionMemoryStore,
   resolveQueryWithSessionMemory,
 } from "../rag/memory.js";
+import {
+  configureLongMemoryStore,
+  listLongMemories,
+  resetLongMemoryStore,
+} from "../rag/long-memory.js";
 import { analyzeComparison } from "../rag/comparison-engine.js";
 import { alignComparisonEvidence } from "../rag/evidence-aligner.js";
+import { planQaEvidenceGap } from "../rag/gap-planner.js";
 import { buildTermSet } from "../rag/text-utils.js";
 
 const originalDataDirectory = getRagDataDirectory();
@@ -208,6 +221,228 @@ const createFakeQdrantClient = () => {
   };
 };
 
+const createFakeLongMemoryStore = () => {
+  const memoriesByUser = new Map();
+
+  const cloneMemory = (memory) => structuredClone(memory);
+
+  const getUserMemories = (userId) => {
+    if (!memoriesByUser.has(userId)) {
+      memoriesByUser.set(userId, []);
+    }
+
+    return memoriesByUser.get(userId);
+  };
+
+  return {
+    async initialize() {
+      return true;
+    },
+    async list({ userId, limit = 50 }) {
+      return getUserMemories(userId).slice(0, limit).map(cloneMemory);
+    },
+    async remember({
+      userId,
+      category = "note",
+      memoryKey = null,
+      memoryValue = null,
+      text,
+      source = "user_explicit",
+      confidence = 1,
+    }) {
+      const memories = getUserMemories(userId);
+      const existingIndex = memories.findIndex((memory) =>
+        memoryKey
+          ? memory.category === category && memory.memoryKey === memoryKey
+          : memory.category === category && memory.text === text
+      );
+      const now = new Date().toISOString();
+
+      if (existingIndex !== -1) {
+        memories[existingIndex] = {
+          ...memories[existingIndex],
+          memoryValue,
+          text,
+          source,
+          confidence,
+          updatedAt: now,
+        };
+
+        return cloneMemory(memories[existingIndex]);
+      }
+
+      const memory = {
+        memoryId: `${userId}-${memories.length + 1}`,
+        userId,
+        category,
+        memoryKey,
+        memoryValue,
+        text,
+        source,
+        confidence,
+        createdAt: now,
+        updatedAt: now,
+        lastUsedAt: null,
+      };
+
+      memories.unshift(memory);
+      return cloneMemory(memory);
+    },
+    async delete({ userId, memoryId }) {
+      const memories = getUserMemories(userId);
+      const index = memories.findIndex((memory) => memory.memoryId === memoryId);
+
+      if (index === -1) {
+        return null;
+      }
+
+      const [deletedMemory] = memories.splice(index, 1);
+      return cloneMemory(deletedMemory);
+    },
+    async clear({ userId }) {
+      const count = getUserMemories(userId).length;
+      memoriesByUser.set(userId, []);
+      return count;
+    },
+    async touch({ memoryIds }) {
+      const now = new Date().toISOString();
+      let touchedCount = 0;
+
+      for (const memories of memoriesByUser.values()) {
+        for (const memory of memories) {
+          if (memoryIds.includes(memory.memoryId)) {
+            memory.lastUsedAt = now;
+            touchedCount += 1;
+          }
+        }
+      }
+
+      return touchedCount;
+    },
+  };
+};
+
+const createFakeDocumentRegistryStore = () => {
+  const documentsById = new Map();
+  const filesById = new Map();
+
+  const toStoredDocument = (document = {}, fileBuffer = Buffer.alloc(0)) => {
+    const docId = String(document.docId ?? "").trim();
+    const publicFilePath = buildPublicFilePath(docId);
+
+    return {
+      docId,
+      fileName: String(document.fileName ?? "").trim(),
+      filePath: publicFilePath,
+      publicFilePath,
+      mimeType: String(document.mimeType ?? "application/pdf"),
+      fileSize:
+        Number.parseInt(document.fileSize ?? `${fileBuffer.byteLength}`, 10) ||
+        fileBuffer.byteLength,
+      chunkCount: Number.parseInt(document.chunkCount ?? "0", 10) || 0,
+      pageCount: Number.parseInt(document.pageCount ?? "0", 10) || 0,
+      uploadedAt: document.uploadedAt ?? new Date().toISOString(),
+      storageBackend: "postgresql",
+    };
+  };
+
+  return {
+    async initialize() {
+      return true;
+    },
+    async list() {
+      return [...documentsById.values()].map((document) => structuredClone(document));
+    },
+    async upsert(document) {
+      const fileBuffer = document.fileBuffer
+        ? Buffer.from(document.fileBuffer)
+        : document.sourceFilePath
+          ? await readFile(document.sourceFilePath)
+          : Buffer.alloc(0);
+      const storedDocument = toStoredDocument(document, fileBuffer);
+
+      documentsById.set(storedDocument.docId, storedDocument);
+      filesById.set(storedDocument.docId, {
+        fileBuffer,
+        fileName: storedDocument.fileName,
+        mimeType: storedDocument.mimeType,
+        fileSize: storedDocument.fileSize,
+      });
+
+      return structuredClone(storedDocument);
+    },
+    async getFile(docId) {
+      const storedDocument = documentsById.get(docId);
+      const storedFile = filesById.get(docId);
+
+      if (!storedDocument || !storedFile) {
+        return null;
+      }
+
+      return {
+        document: structuredClone(storedDocument),
+        fileBuffer: Buffer.from(storedFile.fileBuffer),
+        fileName: storedFile.fileName,
+        mimeType: storedFile.mimeType,
+        fileSize: storedFile.fileSize,
+      };
+    },
+    async delete(docId) {
+      const storedDocument = documentsById.get(docId) ?? null;
+      documentsById.delete(docId);
+      filesById.delete(docId);
+      return storedDocument ? structuredClone(storedDocument) : null;
+    },
+    async clear() {
+      documentsById.clear();
+      filesById.clear();
+      return true;
+    },
+    async reset() {
+      documentsById.clear();
+      filesById.clear();
+      return true;
+    },
+  };
+};
+
+const createFakeSessionMemoryStore = () => {
+  const sessionsById = new Map();
+
+  const cloneSession = (session) =>
+    session
+      ? {
+          updatedAt: Number(session.updatedAt ?? Date.now()),
+          messages: structuredClone(session.messages ?? []),
+        }
+      : null;
+
+  return {
+    async initialize() {
+      return true;
+    },
+    async get(sessionId) {
+      return cloneSession(sessionsById.get(sessionId) ?? null);
+    },
+    async upsert({ sessionId, messages, updatedAt = Date.now() }) {
+      const session = {
+        updatedAt,
+        messages: structuredClone(messages ?? []),
+      };
+
+      sessionsById.set(sessionId, session);
+      return cloneSession(session);
+    },
+    async delete(sessionId) {
+      return sessionsById.delete(sessionId);
+    },
+    async reset() {
+      sessionsById.clear();
+      return true;
+    },
+  };
+};
+
 const provider = {
   embedTexts: async (texts) => texts.map((text) => toEmbedding(text)),
   embedQuery: async (query) => toEmbedding(query),
@@ -298,9 +533,14 @@ const buildComparisonAnalysis = ({ query, entries }) => {
 beforeEach(async () => {
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "agentai-rag-test-"));
   configureRagDataDirectory(path.join(tempRoot, "rag-data"));
-  resetDocumentRegistry();
+  await resetDocumentRegistryStore();
+  configureDocumentRegistryStore(createFakeDocumentRegistryStore());
+  await resetDocumentRegistry();
   resetVectorStore();
+  await resetSessionMemoryStore();
+  configureSessionMemoryStore(createFakeSessionMemoryStore());
   resetSessionMemory();
+  await resetLongMemoryStore();
   configureOpenAIProvider(provider);
   resetQdrantClientFactory();
 });
@@ -309,15 +549,16 @@ afterEach(async () => {
   await clearDocuments({
     deleteFiles: false,
   });
-  resetSessionMemory();
+  await resetSessionMemoryStore();
+  await resetLongMemoryStore();
   resetVectorStore();
-  resetDocumentRegistry();
+  await resetDocumentRegistryStore();
   resetOpenAIProvider();
   resetQdrantClientFactory();
   configureRagDataDirectory(originalDataDirectory);
-  resetSessionMemory();
+  await resetSessionMemoryStore();
   resetVectorStore();
-  resetDocumentRegistry();
+  await resetDocumentRegistryStore();
 
   if (tempRoot) {
     await rm(tempRoot, { recursive: true, force: true });
@@ -398,7 +639,7 @@ test("v3 rewrite prompt accepts structured JSON output", async () => {
       ],
     });
 
-    recordSessionTurn({
+    await recordSessionTurn({
       sessionId: "session-json",
       query: "Tell me about remote work.",
       resolvedQuery: "Tell me about remote work.",
@@ -426,6 +667,68 @@ test("v3 rewrite prompt accepts structured JSON output", async () => {
     }
 
     configureOpenAIProvider(provider);
+  }
+});
+
+test("chat stores explicit long-term preferences and injects them into later prompts", async () => {
+  const originalLongMemoryEnabled = process.env.RAG_LONG_MEMORY_ENABLED;
+  const fakeLongMemoryStore = createFakeLongMemoryStore();
+  const capturedPrompts = [];
+
+  process.env.RAG_LONG_MEMORY_ENABLED = "true";
+  configureLongMemoryStore(fakeLongMemoryStore);
+  configureOpenAIProvider({
+    ...provider,
+    completeText: async (prompt) => {
+      capturedPrompts.push(prompt);
+      return "Grounded answer based on Source 1.";
+    },
+  });
+
+  try {
+    await ingestFixture({
+      docId: "benefits-memory",
+      fileName: "benefits-memory.pdf",
+      pages: [
+        "Remote work policy: employees may work remotely 2 days per week with manager approval.",
+      ],
+    });
+
+    await chat(["benefits-memory"], "以后用中文回答", {
+      userId: "user-memory",
+    });
+
+    const storedMemories = await listLongMemories({
+      userId: "user-memory",
+    });
+
+    assert.ok(
+      storedMemories.some(
+        (memory) =>
+          memory.category === "preference" &&
+          memory.memoryKey === "reply_language" &&
+          memory.memoryValue === "zh"
+      )
+    );
+
+    capturedPrompts.length = 0;
+
+    await chat(["benefits-memory"], "What is the remote work policy?", {
+      userId: "user-memory",
+    });
+
+    assert.ok(
+      capturedPrompts.some((prompt) => prompt.includes("Reply language: Chinese."))
+    );
+  } finally {
+    if (originalLongMemoryEnabled === undefined) {
+      delete process.env.RAG_LONG_MEMORY_ENABLED;
+    } else {
+      process.env.RAG_LONG_MEMORY_ENABLED = originalLongMemoryEnabled;
+    }
+
+    configureOpenAIProvider(provider);
+    await resetLongMemoryStore();
   }
 });
 
@@ -903,9 +1206,88 @@ test("unsupported questions abstain instead of using adjacent policies", async (
   const response = await chat(["benefits-2024"], "What is the parental leave policy?");
 
   assert.equal(response.abstained, true);
-  assert.match(response.abstainReason, /grounded evidence/i);
-  assert.match(response.text, /couldn't find enough grounded evidence/i);
+  assert.ok(response.gapPlan);
+  assert.match(response.text, /parental leave|reliable evidence/i);
+  assert.match(response.abstainReason, /parental leave|reliable evidence/i);
+  assert.ok(response.gapPlan.missingAspects.length > 0);
+  assert.equal("possibleLocations" in response.gapPlan, false);
   assert.equal(response.citations.length, 0);
+});
+
+test("gap planner points to likely sections and follow-up questions", () => {
+  const gapPlan = planQaEvidenceGap({
+    query: "When does the refund policy take effect and which regions does it apply to?",
+    results: [
+      {
+        document: {
+          id: "refund:0",
+          pageContent:
+            "Refund policy: unopened products may be returned with a receipt.",
+          metadata: {
+            docId: "refund",
+            fileName: "refund-guide.pdf",
+            pageNumber: 3,
+            chunkIndex: 0,
+            sectionHeading: "Refund Policy",
+            publicFilePath: "/uploads/refund-guide.pdf",
+          },
+        },
+        score: 0.92,
+        keywordScore: 0.71,
+      },
+      {
+        document: {
+          id: "refund:1",
+          pageContent: "Implementation notes for store staff.",
+          metadata: {
+            docId: "refund",
+            fileName: "refund-guide.pdf",
+            pageNumber: 7,
+            chunkIndex: 1,
+            sectionHeading: "Effective Date",
+            publicFilePath: "/uploads/refund-guide.pdf",
+          },
+        },
+        score: 0.56,
+        keywordScore: 0.33,
+      },
+      {
+        document: {
+          id: "refund:2",
+          pageContent: "Operational checklist for the support team.",
+          metadata: {
+            docId: "refund",
+            fileName: "refund-guide.pdf",
+            pageNumber: 8,
+            chunkIndex: 2,
+            sectionHeading: "Scope",
+            publicFilePath: "/uploads/refund-guide.pdf",
+          },
+        },
+        score: 0.51,
+        keywordScore: 0.31,
+      },
+    ],
+    confidence: {
+      reason: "I couldn't find enough grounded evidence in the uploaded documents to answer reliably.",
+    },
+  });
+
+  assert.match(gapPlan.summary, /refund/i);
+  assert.ok(
+    gapPlan.missingAspects.some((aspect) =>
+      /effective date or timing/i.test(aspect.label)
+    )
+  );
+  assert.ok(
+    gapPlan.missingAspects.some((aspect) =>
+      /scope, audience, or region/i.test(aspect.label)
+    )
+  );
+  assert.ok(gapPlan.possibleLocations.some((location) => location.pageNumber === 7));
+  assert.ok(gapPlan.possibleLocations.some((location) => location.pageNumber === 8));
+  assert.ok(gapPlan.supplementalQueries.length >= 2);
+  assert.equal("suggestedQuestions" in gapPlan, false);
 });
 
 test("code-like anchors must appear in evidence before qa answers proceed", async () => {
@@ -929,6 +1311,55 @@ test("code-like anchors must appear in evidence before qa answers proceed", asyn
   assert.equal(response.citations.length, 0);
 });
 
+test("qa abstain path runs supplemental retrieval to improve gap suggestions", async () => {
+  const originalTopK = process.env.RAG_RETRIEVAL_TOP_K;
+
+  process.env.RAG_RETRIEVAL_TOP_K = "1";
+
+  try {
+    await ingestFixture({
+      docId: "refund-manual",
+      fileName: "refund-manual.pdf",
+      pages: [
+        "Refund Policy\n\nUnopened products may be returned with a receipt.",
+        "Refund Procedure\n\nCustomers should contact support before shipping a return.",
+        "Refund Procedure\n\nStore managers must inspect the product before approval.",
+        "Refund Procedure\n\nRefunds are issued back to the original payment method.",
+        "Refund Procedure\n\nDamaged packaging alone does not qualify for a refund.",
+        "Refund Procedure\n\nSupport teams track each return in the internal tool.",
+        "Effective Date\n\nThis policy was approved by operations leadership.",
+        "Scope\n\nThis policy is used by regional support teams.",
+      ],
+    });
+
+    const response = await chat(
+      ["refund-manual"],
+      "When does the refund policy take effect and which regions does it apply to?"
+    );
+
+    assert.equal(response.abstained, true);
+    assert.ok(response.gapPlan);
+    assert.ok(response.gapPlan.supplementalSearches.length >= 2);
+    assert.ok(
+      response.gapPlan.missingAspects.some((aspect) =>
+        /effective date or timing/i.test(aspect.label)
+      )
+    );
+    assert.ok(
+      response.gapPlan.supplementalSearches.some((search) =>
+        /scope, audience, or region/i.test(search.label)
+      )
+    );
+    assert.equal("possibleLocations" in response.gapPlan, false);
+  } finally {
+    if (originalTopK === undefined) {
+      delete process.env.RAG_RETRIEVAL_TOP_K;
+    } else {
+      process.env.RAG_RETRIEVAL_TOP_K = originalTopK;
+    }
+  }
+});
+
 test("persisted registry, vector data, and session memory survive reloads", async () => {
   await ingestFixture({
     docId: "benefits-2025",
@@ -938,7 +1369,7 @@ test("persisted registry, vector data, and session memory survive reloads", asyn
     ],
   });
 
-  recordSessionTurn({
+  await recordSessionTurn({
     sessionId: "session-1",
     query: "Tell me about remote work.",
     resolvedQuery: "Tell me about remote work.",

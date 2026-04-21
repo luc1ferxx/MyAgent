@@ -5,15 +5,25 @@ import multer from "multer";
 import { randomUUID } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
+import { requireApiAuth } from "./auth.js";
 import chat, {
   clearDocuments,
+  clearLongMemories,
   clearSessionMemory,
+  deleteLongMemory,
   deleteDocument,
   getDocument,
+  getDocumentFile,
   ingestDocument,
+  initializeDocumentRegistry,
+  initializeLongMemory,
+  initializeSessionMemory,
   listDocuments,
+  listLongMemories,
+  rememberLongMemory,
 } from "./chat.js";
 import chatMCP from "./chat-mcp.js";
+import { buildHealthReport, runStartupHealthChecks } from "./health.js";
 import {
   clearUploadSession,
   configureUploadSessionDirectory,
@@ -89,7 +99,62 @@ const isPdfFile = (file) => {
   return extension === ".pdf" || mimeType === "application/pdf";
 };
 
-const buildChatResponse = async ({ ragService, webChatService, question, docIds, sessionId }) => {
+const buildContentDisposition = (fileName = "document.pdf") =>
+  `inline; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+
+const sendBufferedFile = ({ req, res, fileBuffer, fileName, mimeType }) => {
+  const totalSize = fileBuffer.byteLength;
+  const rangeHeader = req.headers.range?.trim();
+
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Content-Type", mimeType || "application/pdf");
+  res.setHeader("Content-Disposition", buildContentDisposition(fileName));
+  res.setHeader("Cache-Control", "private, max-age=300");
+
+  if (!rangeHeader) {
+    res.setHeader("Content-Length", String(totalSize));
+    res.status(200).end(fileBuffer);
+    return;
+  }
+
+  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/i);
+
+  if (!match) {
+    res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
+    return;
+  }
+
+  const start = match[1] ? Number.parseInt(match[1], 10) : 0;
+  const end = match[2] ? Number.parseInt(match[2], 10) : totalSize - 1;
+
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= totalSize
+  ) {
+    res.status(416).setHeader("Content-Range", `bytes */${totalSize}`).end();
+    return;
+  }
+
+  const safeEnd = Math.min(end, totalSize - 1);
+  const chunk = fileBuffer.subarray(start, safeEnd + 1);
+
+  res.status(206);
+  res.setHeader("Content-Length", String(chunk.byteLength));
+  res.setHeader("Content-Range", `bytes ${start}-${safeEnd}/${totalSize}`);
+  res.end(chunk);
+};
+
+const buildChatResponse = async ({
+  ragService,
+  webChatService,
+  question,
+  docIds,
+  sessionId,
+  userId,
+}) => {
   const missingDocIds = docIds.filter((docId) => !ragService.getDocument(docId));
 
   if (missingDocIds.length > 0) {
@@ -105,6 +170,7 @@ const buildChatResponse = async ({ ragService, webChatService, question, docIds,
   const [ragResp, mcpResp] = await Promise.allSettled([
     ragService.chat(docIds, question, {
       sessionId,
+      userId,
     }),
     webChatService(question),
   ]);
@@ -131,6 +197,8 @@ const buildChatResponse = async ({ ragService, webChatService, question, docIds,
       ragResp.status === "fulfilled"
         ? ragResp.value.abstainReason ?? null
         : null,
+    ragGapPlan:
+      ragResp.status === "fulfilled" ? ragResp.value.gapPlan ?? null : null,
     mcpAnswer:
       mcpResp.status === "fulfilled"
         ? mcpResp.value.text
@@ -165,14 +233,23 @@ export const createApp = async (options = {}) => {
     configureUploadSessionDirectory(options.uploadSessionDirectory);
   }
 
-  const ragService = options.ragService ?? {
+  const ragService = {
     chat,
     clearDocuments,
+    clearLongMemories,
     clearSessionMemory,
+    deleteLongMemory,
     deleteDocument,
     getDocument,
+    getDocumentFile,
     ingestDocument,
+    initializeDocumentRegistry,
+    initializeLongMemory,
+    initializeSessionMemory,
     listDocuments,
+    listLongMemories,
+    rememberLongMemory,
+    ...(options.ragService ?? {}),
   };
   const webChatService = options.chatMcp ?? chatMCP;
   const uploadStore = options.uploadStore ?? {
@@ -183,6 +260,10 @@ export const createApp = async (options = {}) => {
     initializeUploadSession,
     removeMergedUpload,
     storeUploadChunk,
+  };
+  const healthService = options.healthService ?? {
+    buildHealthReport,
+    runStartupHealthChecks,
   };
 
   const app = express();
@@ -217,6 +298,70 @@ export const createApp = async (options = {}) => {
 
   await mkdir(uploadsDirectory, { recursive: true });
   await uploadStore.ensureUploadStorage();
+  await ragService.initializeDocumentRegistry?.();
+  await ragService.initializeLongMemory?.();
+  await ragService.initializeSessionMemory?.();
+  await healthService.runStartupHealthChecks?.();
+
+  app.get("/health", async (req, res) => {
+    try {
+      const report = await healthService.buildHealthReport();
+      return res.json(report);
+    } catch (error) {
+      return res.status(500).json({
+        status: "error",
+        error: serializeError(error, "Failed to collect health status."),
+      });
+    }
+  });
+
+  app.get("/ready", async (req, res) => {
+    try {
+      const report = await healthService.buildHealthReport();
+
+      return res.status(report.status === "ok" ? 200 : 503).json(report);
+    } catch (error) {
+      return res.status(503).json({
+        status: "error",
+        error: serializeError(error, "Readiness check failed."),
+      });
+    }
+  });
+
+  app.get("/documents/:docId/file", async (req, res) => {
+    const docId = req.params.docId?.trim();
+
+    if (!docId) {
+      return res.status(400).json({
+        error: "docId is required.",
+      });
+    }
+
+    try {
+      const storedFile = await ragService.getDocumentFile?.(docId);
+
+      if (!storedFile) {
+        return res.status(404).json({
+          error: "Document not found.",
+        });
+      }
+
+      sendBufferedFile({
+        req,
+        res,
+        fileBuffer: storedFile.fileBuffer,
+        fileName: storedFile.fileName,
+        mimeType: storedFile.mimeType,
+      });
+      return;
+    } catch (error) {
+      return res.status(error.status ?? 500).json({
+        error: serializeError(error, "Failed to stream the document."),
+      });
+    }
+  });
+
+  app.use(requireApiAuth);
 
   app.get("/documents", (req, res) => {
     return res.json(ragService.listDocuments());
@@ -265,7 +410,7 @@ export const createApp = async (options = {}) => {
     }
   });
 
-  app.delete("/sessions/:sessionId", (req, res) => {
+  app.delete("/sessions/:sessionId", async (req, res) => {
     const sessionId = req.params.sessionId?.trim();
 
     if (!sessionId) {
@@ -274,9 +419,141 @@ export const createApp = async (options = {}) => {
       });
     }
 
-    return res.json({
-      cleared: ragService.clearSessionMemory(sessionId),
-    });
+    try {
+      return res.json({
+        cleared: await ragService.clearSessionMemory(sessionId),
+      });
+    } catch (error) {
+      return res.status(error.status ?? 500).json({
+        error: serializeError(error, "Failed to clear session memory."),
+      });
+    }
+  });
+
+  app.get("/memory", async (req, res) => {
+    const userId = req.query.userId?.trim();
+    const limit = Number.parseInt(req.query.limit ?? "50", 10);
+
+    if (!userId) {
+      return res.status(400).json({
+        error: "userId is required.",
+      });
+    }
+
+    try {
+      const memories = await ragService.listLongMemories({
+        userId,
+        limit,
+      });
+
+      return res.json({
+        memories,
+      });
+    } catch (error) {
+      return res.status(error.status ?? 500).json({
+        error: serializeError(error, "Failed to load long-term memories."),
+      });
+    }
+  });
+
+  app.post("/memory", async (req, res) => {
+    const userId = req.body.userId?.trim();
+    const text = req.body.text?.trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        error: "userId is required.",
+      });
+    }
+
+    if (!text) {
+      return res.status(400).json({
+        error: "text is required.",
+      });
+    }
+
+    try {
+      const memory = await ragService.rememberLongMemory({
+        userId,
+        category: req.body.category,
+        memoryKey: req.body.memoryKey,
+        memoryValue: req.body.memoryValue,
+        text,
+        source: req.body.source,
+        confidence: req.body.confidence,
+      });
+
+      return res.status(201).json({
+        memory,
+      });
+    } catch (error) {
+      return res.status(error.status ?? 500).json({
+        error: serializeError(error, "Failed to store long-term memory."),
+      });
+    }
+  });
+
+  app.delete("/memory/:memoryId", async (req, res) => {
+    const userId = req.query.userId?.trim();
+    const memoryId = req.params.memoryId?.trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        error: "userId is required.",
+      });
+    }
+
+    if (!memoryId) {
+      return res.status(400).json({
+        error: "memoryId is required.",
+      });
+    }
+
+    try {
+      const memory = await ragService.deleteLongMemory({
+        userId,
+        memoryId,
+      });
+
+      if (!memory) {
+        return res.status(404).json({
+          error: "Memory not found.",
+        });
+      }
+
+      return res.json({
+        deleted: true,
+        memory,
+      });
+    } catch (error) {
+      return res.status(error.status ?? 500).json({
+        error: serializeError(error, "Failed to delete long-term memory."),
+      });
+    }
+  });
+
+  app.delete("/memory", async (req, res) => {
+    const userId = req.query.userId?.trim();
+
+    if (!userId) {
+      return res.status(400).json({
+        error: "userId is required.",
+      });
+    }
+
+    try {
+      const deletedCount = await ragService.clearLongMemories({
+        userId,
+      });
+
+      return res.json({
+        deletedCount,
+      });
+    } catch (error) {
+      return res.status(error.status ?? 500).json({
+        error: serializeError(error, "Failed to clear long-term memories."),
+      });
+    }
   });
 
   app.post("/upload/init", async (req, res) => {
@@ -391,6 +668,8 @@ export const createApp = async (options = {}) => {
         fileName: session.fileName,
       });
 
+      await cleanupUploadedFile(mergedFilePath);
+      mergedFilePath = null;
       await uploadStore.clearUploadSession(fileId);
 
       return res.status(201).json(document);
@@ -417,6 +696,7 @@ export const createApp = async (options = {}) => {
         fileName: req.file.originalname,
       });
 
+      await cleanupUploadedFile(req.file.path);
       return res.status(201).json(document);
     } catch (error) {
       await cleanupUploadedFile(req.file.path);
@@ -432,6 +712,7 @@ export const createApp = async (options = {}) => {
     const question = payload.question?.trim();
     const docIds = parseDocIds(payload.docIds, payload.docId);
     const sessionId = payload.sessionId?.trim() || null;
+    const userId = payload.userId?.trim() || null;
 
     if (!question) {
       return res.status(400).json({
@@ -452,6 +733,7 @@ export const createApp = async (options = {}) => {
         question,
         docIds,
         sessionId,
+        userId,
       });
 
       return res.status(response.status).json(response.body);

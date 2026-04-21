@@ -576,6 +576,62 @@
   background: rgba(255, 255, 255, 0.07);
 }
 
+.archive-gap-panel,
+.archive-gap-block,
+.archive-gap-list {
+  display: grid;
+  gap: 8px;
+}
+
+.archive-gap-panel {
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.archive-gap-copy,
+.archive-gap-item-copy {
+  color: rgba(243, 242, 239, 0.68);
+  font-size: 0.84rem;
+  line-height: 1.6;
+}
+
+.archive-gap-item {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.archive-gap-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.archive-gap-item-title {
+  color: #f3f2ef;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.archive-gap-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(243, 242, 239, 0.58);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .archive-source-head {
   display: flex;
   align-items: flex-start;

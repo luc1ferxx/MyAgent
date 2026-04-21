@@ -1,6 +1,14 @@
 import React from "react";
 import { Spin } from "antd";
 
+const formatLookupCount = (count) => {
+  if (!Number.isFinite(count)) {
+    return "Results unknown";
+  }
+
+  return count === 1 ? "1 result" : `${count} results`;
+};
+
 const RenderQA = (props) => {
   const {
     conversation,
@@ -23,6 +31,8 @@ const RenderQA = (props) => {
   return (
     <div className="archive-log">
       {conversation?.map((each, index) => {
+        const gapPlan = each.answer?.ragGapPlan;
+
         return (
           <article
             key={index}
@@ -48,6 +58,54 @@ const RenderQA = (props) => {
                 </div>
 
                 <div className="archive-answer-text">{each.answer.ragAnswer}</div>
+
+                {gapPlan ? (
+                  <div className="archive-gap-panel">
+                    {gapPlan.missingAspects?.length > 0 ? (
+                      <div className="archive-gap-block">
+                        <div className="archive-source-section-label">
+                          Missing evidence
+                        </div>
+                        <div className="archive-gap-list">
+                          {gapPlan.missingAspects.map((aspect) => (
+                            <div key={aspect.label} className="archive-gap-item">
+                              <div className="archive-gap-item-title">{aspect.label}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {gapPlan.supplementalSearches?.length > 0 ? (
+                      <div className="archive-gap-block">
+                        <div className="archive-source-section-label">
+                          Extra lookups
+                        </div>
+                        <div className="archive-gap-list">
+                          {gapPlan.supplementalSearches.map((lookup) => (
+                            <div
+                              key={`${lookup.label}-${lookup.query}`}
+                              className="archive-gap-item"
+                            >
+                              <div className="archive-gap-item-head">
+                                <div className="archive-gap-item-title">
+                                  {lookup.label}
+                                </div>
+                                <span className="archive-gap-badge">
+                                  {formatLookupCount(lookup.resultCount)}
+                                </span>
+                              </div>
+                              <div className="archive-gap-item-copy">
+                                Search: {lookup.query}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+
+                  </div>
+                ) : null}
 
                 {each.answer.ragSources?.length > 0 && (
                   <div className="archive-source-list">

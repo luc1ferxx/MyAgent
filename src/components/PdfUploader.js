@@ -2,7 +2,7 @@ import React from "react";
 import axios from "axios";
 import { InboxOutlined } from "@ant-design/icons";
 import { message, Upload } from "antd";
-import { API_DOMAIN } from "../config";
+import { API_DOMAIN, buildApiRequestConfig } from "../config";
 
 const { Dragger } = Upload;
 const CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
@@ -14,14 +14,18 @@ const getTotalChunks = (file) =>
   Math.max(1, Math.ceil(file.size / CHUNK_SIZE_BYTES));
 
 const initializeUpload = async (file, fileId) => {
-  const response = await axios.post(`${API_DOMAIN}/upload/init`, {
+  const payload = {
     fileId,
     fileName: file.name,
     fileSize: file.size,
     lastModified: file.lastModified,
     totalChunks: getTotalChunks(file),
     chunkSize: CHUNK_SIZE_BYTES,
-  });
+  };
+  const requestConfig = buildApiRequestConfig();
+  const response = requestConfig
+    ? await axios.post(`${API_DOMAIN}/upload/init`, payload, requestConfig)
+    : await axios.post(`${API_DOMAIN}/upload/init`, payload);
 
   return response.data;
 };
@@ -36,19 +40,28 @@ const uploadChunk = async ({ file, fileId, chunkIndex, totalChunks }) => {
   formData.append("chunkIndex", String(chunkIndex));
   formData.append("totalChunks", String(totalChunks));
 
-  const response = await axios.post(`${API_DOMAIN}/upload/chunk`, formData, {
+  const requestConfig = buildApiRequestConfig({
     headers: {
       "Content-Type": "multipart/form-data",
     },
   });
+  const response = await axios.post(
+    `${API_DOMAIN}/upload/chunk`,
+    formData,
+    requestConfig
+  );
 
   return response.data;
 };
 
 const completeUpload = async (fileId) => {
-  const response = await axios.post(`${API_DOMAIN}/upload/complete`, {
+  const payload = {
     fileId,
-  });
+  };
+  const requestConfig = buildApiRequestConfig();
+  const response = requestConfig
+    ? await axios.post(`${API_DOMAIN}/upload/complete`, payload, requestConfig)
+    : await axios.post(`${API_DOMAIN}/upload/complete`, payload);
 
   return response.data;
 };

@@ -1,6 +1,5 @@
 import { Document } from "@langchain/core/documents";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
-import { unlink } from "fs/promises";
 import { chunkDocument } from "./chunker.js";
 import { analyzeComparison } from "./comparison-engine.js";
 import { assessComparisonConfidence, assessQaConfidence } from "./confidence.js";
@@ -8,17 +7,30 @@ import {
   clearDocuments as clearRegisteredDocuments,
   deleteDocument as deleteRegisteredDocument,
   getDocument,
+  getDocumentFile,
   getDocuments,
   getStoredDocument,
   hasDocument,
+  initializeDocumentRegistry,
   listDocuments,
   normalizeDocIds,
   registerDocument,
 } from "./doc-registry.js";
 import { buildPublicFilePath } from "./document-utils.js";
 import { alignComparisonEvidence } from "./evidence-aligner.js";
+import { planQaEvidenceGap } from "./gap-planner.js";
+import {
+  clearLongMemories,
+  deleteLongMemory,
+  getLongMemoryContext,
+  initializeLongMemory,
+  listLongMemories,
+  recordLongMemoryFromUserMessage,
+  rememberLongMemory,
+} from "./long-memory.js";
 import {
   clearSessionMemory,
+  initializeSessionMemory,
   recordSessionTurn,
   resolveQueryWithSessionMemory,
 } from "./memory.js";
@@ -32,18 +44,33 @@ import {
   writeComparisonAnswer,
   writeQaAnswer,
 } from "./answer-writer.js";
+import { getResultKey } from "./citations.js";
 import { addDocumentsToIndex, clearVectorIndex, removeDocumentsFromIndex } from "./vector-store.js";
 
-export { clearSessionMemory, getDocument, getDocuments, listDocuments };
+export {
+  clearLongMemories,
+  clearSessionMemory,
+  deleteLongMemory,
+  getDocument,
+  getDocumentFile,
+  getDocuments,
+  initializeDocumentRegistry,
+  initializeLongMemory,
+  initializeSessionMemory,
+  listDocuments,
+  listLongMemories,
+  rememberLongMemory,
+};
 
 const getPageNumber = (metadata = {}, fallbackPageNumber = null) =>
   metadata.loc?.pageNumber ?? metadata.pageNumber ?? metadata.page ?? fallbackPageNumber;
 
 export const ingestDocumentPages = async ({ docId, filePath, fileName, pages }) => {
+  const publicFilePath = buildPublicFilePath(docId);
   const chunks = chunkDocument({
     docId,
     fileName,
-    filePath,
+    publicFilePath,
     pages,
   });
 
@@ -65,11 +92,11 @@ export const ingestDocumentPages = async ({ docId, filePath, fileName, pages }) 
     documents: langChainDocuments,
   });
 
-  registerDocument({
+  await registerDocument({
     docId,
     fileName,
-    filePath,
-    publicFilePath: buildPublicFilePath(filePath),
+    sourceFilePath: filePath,
+    publicFilePath,
     chunkCount: chunks.length,
     pageCount: pages.length,
     uploadedAt: new Date().toISOString(),
@@ -107,6 +134,95 @@ const ensureDocumentsExist = (docIds) => {
   throw error;
 };
 
+const mergeRetrievedResults = (...resultGroups) => {
+  const mergedResults = [];
+  const seenResultKeys = new Set();
+
+  for (const results of resultGroups) {
+    for (const result of results ?? []) {
+      const resultKey = getResultKey(result);
+
+      if (seenResultKeys.has(resultKey)) {
+        continue;
+      }
+
+      seenResultKeys.add(resultKey);
+      mergedResults.push(result);
+    }
+  }
+
+  return mergedResults;
+};
+
+const buildQaGapPlan = async ({
+  query,
+  results,
+  confidence,
+  docIds,
+}) => {
+  const toClientGapPlan = (gapPlan, supplementalSearches = []) => ({
+    userMessage: gapPlan.userMessage,
+    missingAspects: (gapPlan.missingAspects ?? []).map((aspect) => ({
+      label: aspect.label,
+    })),
+    supplementalSearches,
+  });
+  const initialGapPlan = planQaEvidenceGap({
+    query,
+    results,
+    confidence,
+  });
+  const supplementalQueries = initialGapPlan.supplementalQueries ?? [];
+
+  if (supplementalQueries.length === 0) {
+    return toClientGapPlan(initialGapPlan);
+  }
+
+  const supplementalSearches = await Promise.all(
+    supplementalQueries.map(async (supplementalQuery) => {
+      const supplementalVector = await embedQuery(supplementalQuery.query);
+      const supplementalResults = await retrieveGlobalContext({
+        queryVector: supplementalVector,
+        queryText: supplementalQuery.query,
+        docIds,
+      });
+
+      return {
+        ...supplementalQuery,
+        results: supplementalResults,
+      };
+    })
+  );
+  const mergedResults = mergeRetrievedResults(
+    results,
+    ...supplementalSearches.map((search) => search.results)
+  );
+
+  if (mergedResults.length === results.length) {
+    return toClientGapPlan(
+      initialGapPlan,
+      supplementalSearches.map((search) => ({
+        label: search.label,
+        query: search.query,
+        resultCount: search.results.length,
+      }))
+    );
+  }
+
+  return toClientGapPlan(
+    planQaEvidenceGap({
+      query,
+      results: mergedResults,
+      confidence,
+    }),
+    supplementalSearches.map((search) => ({
+      label: search.label,
+      query: search.query,
+      resultCount: search.results.length,
+    }))
+  );
+};
+
 export const deleteDocument = async (docId, { deleteFile = true } = {}) => {
   const storedDocument = getStoredDocument(docId);
 
@@ -117,45 +233,21 @@ export const deleteDocument = async (docId, { deleteFile = true } = {}) => {
   await removeDocumentsFromIndex({
     docIds: [docId],
   });
-  deleteRegisteredDocument(docId);
-
-  if (deleteFile) {
-    try {
-      await unlink(storedDocument.filePath);
-    } catch (error) {
-      if (error.code !== "ENOENT") {
-        throw error;
-      }
-    }
-  }
+  await deleteRegisteredDocument(docId);
 
   return storedDocument;
 };
 
 export const clearDocuments = async ({ deleteFiles = true } = {}) => {
-  const documents = clearRegisteredDocuments();
+  const documents = await clearRegisteredDocuments();
 
   await clearVectorIndex();
-
-  if (deleteFiles) {
-    await Promise.all(
-      documents.map(async (document) => {
-        try {
-          await unlink(document.filePath);
-        } catch (error) {
-          if (error.code !== "ENOENT") {
-            throw error;
-          }
-        }
-      })
-    );
-  }
 
   return documents;
 };
 
 const chat = async (docIds, query, options = {}) => {
-  const { sessionId = null } = options;
+  const { sessionId = null, userId = null } = options;
   const normalizedDocIds = normalizeDocIds(docIds);
 
   if (normalizedDocIds.length === 0) {
@@ -164,16 +256,33 @@ const chat = async (docIds, query, options = {}) => {
     throw error;
   }
 
+  await initializeDocumentRegistry();
   ensureDocumentsExist(normalizedDocIds);
 
   const selectedDocuments = getDocuments(normalizedDocIds);
+  let longMemoryContext = {
+    memories: [],
+    rewriteBlock: "",
+    answerBlock: "",
+  };
+
+  try {
+    longMemoryContext = await getLongMemoryContext({
+      userId,
+      query,
+    });
+  } catch (error) {
+    console.error("Failed to load long-term memory context.", error);
+  }
+
   const memoryResolution = await resolveQueryWithSessionMemory({
     sessionId,
     query,
     documents: selectedDocuments,
+    longTermMemory: longMemoryContext.rewriteBlock,
   });
   const resolvedQuery = memoryResolution.resolvedQuery;
-  const buildResponse = (response) => {
+  const buildResponse = async (response) => {
     const abstained = Boolean(response.abstained);
     const result = {
       ...response,
@@ -183,7 +292,7 @@ const chat = async (docIds, query, options = {}) => {
       memoryApplied: memoryResolution.memoryApplied,
     };
 
-    recordSessionTurn({
+    await recordSessionTurn({
       sessionId,
       query,
       resolvedQuery,
@@ -191,6 +300,17 @@ const chat = async (docIds, query, options = {}) => {
       documents: selectedDocuments,
       routeMode: route.mode,
     });
+
+    if (userId) {
+      try {
+        await recordLongMemoryFromUserMessage({
+          userId,
+          query,
+        });
+      } catch (error) {
+        console.error("Failed to persist long-term memory from user message.", error);
+      }
+    }
 
     return result;
   };
@@ -238,6 +358,7 @@ const chat = async (docIds, query, options = {}) => {
         resolvedQuery,
         bundle,
         analysis,
+        preferenceBlock: longMemoryContext.answerBlock,
       })
     );
   }
@@ -256,11 +377,22 @@ const chat = async (docIds, query, options = {}) => {
   });
 
   if (!confidence.confident) {
+    const gapPlan = await buildQaGapPlan({
+      query: resolvedQuery,
+      results: retrievalResults,
+      confidence,
+      docIds: normalizedDocIds,
+    });
+
     return buildResponse({
-      text: confidence.reason,
+      text: gapPlan.userMessage,
       citations: bundle.citations,
       abstained: true,
-      abstainReason: confidence.reason,
+      abstainReason: gapPlan.userMessage,
+      gapPlan: {
+        missingAspects: gapPlan.missingAspects,
+        supplementalSearches: gapPlan.supplementalSearches,
+      },
     });
   }
 
@@ -269,6 +401,7 @@ const chat = async (docIds, query, options = {}) => {
       query,
       resolvedQuery,
       bundle,
+      preferenceBlock: longMemoryContext.answerBlock,
     })
   );
 };

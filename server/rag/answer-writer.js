@@ -16,10 +16,13 @@ const qaPromptV1 = PromptTemplate.fromTemplate(
   `You answer questions using only retrieved document evidence.
 If the evidence is insufficient, say so directly.
 Do not substitute adjacent topics for the asked topic.
+Use long-term memory only for user preferences or stable notes, never as document evidence.
 Keep the answer concise, within five sentences.
 When you rely on evidence, cite source labels such as Source 1.
 
 {questionBlock}
+
+{preferenceBlock}
 
 Retrieved Evidence:
 {context}
@@ -32,9 +35,12 @@ const comparisonPromptV1 = PromptTemplate.fromTemplate(
 Separate agreement, difference, and uncertainty.
 If a document lacks evidence, say so explicitly.
 Do not treat a related but different policy as evidence for the asked policy.
+Use long-term memory only for user preferences or stable notes, never as document evidence.
 Keep the answer concise and cite source labels such as Source 1 when making evidence-based claims.
 
 {questionBlock}
+
+{preferenceBlock}
 
 Comparison diagnostics:
 {diagnostics}
@@ -56,9 +62,12 @@ Separate agreement, difference, and uncertainty.
 If a document lacks evidence, say so explicitly.
 Do not treat a related but different policy as evidence for the asked policy.
 If the diagnostics indicate near-duplicate evidence without explicit conflicts, do not invent differences.
+Use long-term memory only for user preferences or stable notes, never as document evidence.
 Keep the answer concise and cite source labels such as Source 1 when making evidence-based claims.
 
 {questionBlock}
+
+{preferenceBlock}
 
 Comparison diagnostics:
 {diagnostics}
@@ -83,6 +92,7 @@ Follow these rules strictly:
 - Use the same language as the user's latest question.
 - Answer the original user question, not the retrieval paraphrase.
 - Use the resolved retrieval question only to clarify references or scope.
+- Use long-term memory only for user preferences or stable notes, never as document evidence or a citation source.
 - Do not substitute related topics, adjacent policies, or likely assumptions for the asked topic.
 - If the evidence is insufficient, say exactly what is missing and do not guess.
 - Every evidence-based sentence must end with citations like [Source 1].
@@ -92,6 +102,8 @@ Follow these rules strictly:
   [
     "human",
     `{questionBlock}
+
+{preferenceBlock}
 
 Retrieved evidence:
 {context}
@@ -109,6 +121,7 @@ Follow these rules strictly:
 - Use the same language as the user's latest question.
 - Separate agreement, difference, and uncertainty clearly.
 - If any document lacks strong evidence, say so explicitly.
+- Use long-term memory only for user preferences or stable notes, never as document evidence or a citation source.
 - Do not treat a related but different policy as evidence for the asked policy.
 - Do not fill evidence gaps with assumptions.
 - Every evidence-based sentence must end with citations like [Source 1].
@@ -118,6 +131,8 @@ Follow these rules strictly:
   [
     "human",
     `{questionBlock}
+
+{preferenceBlock}
 
 Comparison diagnostics:
 {diagnostics}
@@ -145,6 +160,7 @@ Follow these rules strictly:
 - Use the same language as the user's latest question.
 - Separate agreement, difference, and uncertainty clearly.
 - If any document lacks strong evidence, say so explicitly.
+- Use long-term memory only for user preferences or stable notes, never as document evidence or a citation source.
 - Do not treat a related but different policy as evidence for the asked policy.
 - Do not fill evidence gaps with assumptions.
 - If the diagnostics say the evidence is near-duplicate and no explicit conflict is present, do not invent differences.
@@ -156,6 +172,8 @@ Follow these rules strictly:
   [
     "human",
     `{questionBlock}
+
+{preferenceBlock}
 
 Comparison diagnostics:
 {diagnostics}
@@ -182,6 +200,9 @@ const buildQuestionBlock = ({ query, resolvedQuery }) =>
         "Answer the user question. Use the resolved retrieval question only for reference disambiguation.",
       ].join("\n\n")
     : `User Question:\n${query}`;
+
+const buildPreferenceBlock = (preferenceBlock = "") =>
+  preferenceBlock?.trim() ? preferenceBlock.trim() : "Long-term memory: none.";
 
 const formatSelectedPrompt = async ({ v1Template, v2Template, values }) =>
   getPromptVersion() === "v1" ? v1Template.format(values) : v2Template.invoke(values);
@@ -384,7 +405,12 @@ export const prepareComparisonSourceBundle = ({ alignment }) => {
   };
 };
 
-export const writeQaAnswer = async ({ query, resolvedQuery, bundle }) => {
+export const writeQaAnswer = async ({
+  query,
+  resolvedQuery,
+  bundle,
+  preferenceBlock = "",
+}) => {
   const prompt = await formatSelectedPrompt({
     v1Template: qaPromptV1,
     v2Template: qaPromptV2,
@@ -393,6 +419,7 @@ export const writeQaAnswer = async ({ query, resolvedQuery, bundle }) => {
         query,
         resolvedQuery,
       }),
+      preferenceBlock: buildPreferenceBlock(preferenceBlock),
       context: bundle.context,
     },
   });
@@ -409,6 +436,7 @@ export const writeComparisonAnswer = async ({
   resolvedQuery,
   bundle,
   analysis,
+  preferenceBlock = "",
 }) => {
   const nearDuplicateGuardEnabled = isNearDuplicateGuardEnabled();
 
@@ -442,6 +470,7 @@ export const writeComparisonAnswer = async ({
         query,
         resolvedQuery,
       }),
+      preferenceBlock: buildPreferenceBlock(preferenceBlock),
       diagnostics,
       context: bundle.context,
     },

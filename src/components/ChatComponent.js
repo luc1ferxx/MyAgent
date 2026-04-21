@@ -6,16 +6,21 @@ import SpeechRecognition, {
   useSpeechRecognition,
 } from "react-speech-recognition";
 import Speech from "speak-tts";
-import { API_DOMAIN } from "../config";
+import { API_DOMAIN, buildApiRequestConfig } from "../config";
 
 const { Search } = Input;
 
-const requestChat = async ({ docIds, question, sessionId }) => {
-  const response = await axios.post(`${API_DOMAIN}/chat`, {
+const requestChat = async ({ docIds, question, sessionId, userId }) => {
+  const payload = {
     question,
     docIds: docIds.join(","),
     sessionId,
-  });
+    userId,
+  };
+  const requestConfig = buildApiRequestConfig();
+  const response = requestConfig
+    ? await axios.post(`${API_DOMAIN}/chat`, payload, requestConfig)
+    : await axios.post(`${API_DOMAIN}/chat`, payload);
 
   return response.data;
 };
@@ -25,6 +30,7 @@ const ChatComponent = (props) => {
     docIds = [],
     docLabel,
     sessionId,
+    userId,
     handleResp,
     isLoading,
     setIsLoading,
@@ -89,6 +95,7 @@ const ChatComponent = (props) => {
           docIds,
           question: trimmedQuestion,
           sessionId,
+          userId,
         });
 
         handleResp(trimmedQuestion, data);
@@ -105,13 +112,23 @@ const ChatComponent = (props) => {
         handleResp(trimmedQuestion, {
           ragAnswer: `RAG unavailable: ${backendMessage}`,
           ragSources: [],
+          ragGapPlan: null,
           mcpAnswer: `Web search unavailable: ${backendMessage}`,
         });
       } finally {
         setIsLoading(false);
       }
     },
-    [docIds, handleResp, hasDocuments, isChatModeOn, sessionId, setIsLoading, talk]
+    [
+      docIds,
+      handleResp,
+      hasDocuments,
+      isChatModeOn,
+      sessionId,
+      setIsLoading,
+      talk,
+      userId,
+    ]
   );
 
   useEffect(() => {

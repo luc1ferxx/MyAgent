@@ -1,8 +1,12 @@
 import { ChatPromptTemplate, PromptTemplate } from "@langchain/core/prompts";
 import { completeText } from "./openai.js";
-import { getPromptVersion } from "./config.js";
+import {
+  getPromptVersion,
+  getSessionMemoryPostgresTable,
+} from "./config.js";
+import { runPostgresMigrations } from "./db-migrations.js";
+import { queryPostgres } from "./postgres.js";
 import { tokenize } from "./text-utils.js";
-import { getRagDataPath, readJsonFileSync, writeJsonFileSync } from "./storage.js";
 
 const SESSION_TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_RECENT_TURNS = 3;
@@ -13,51 +17,26 @@ const FOLLOW_UP_PATTERNS = [
   /^\s*(and|also|then|what about|how about|same for|and for|what else)\b/i,
   /(?:\u4e0a\u4e00|\u4e0a\u4e2a|\u8fd9\u4e2a|\u90a3\u4e2a|\u8fd9\u4efd|\u90a3\u4efd|\u5b83|\u5b83\u4eec|\u4ed6\u4eec|\u524d\u8005|\u540e\u8005|\u540c\u6837|\u7ee7\u7eed|\u90a3|\u518d|\u7b2c\u4e8c\u4e2a|\u7b2c\u4e00\u4e2a)/,
 ];
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 1000;
+const TABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-const sessionMemoryPath = () => getRagDataPath("session-memory.json");
-
-const loadSessionMemoryStore = () => {
-  const storedSessions = readJsonFileSync(sessionMemoryPath(), []);
-  const nextStore = new Map();
-
-  for (const session of storedSessions) {
-    const sessionId = String(session?.sessionId ?? "").trim();
-
-    if (!sessionId) {
-      continue;
-    }
-
-    nextStore.set(sessionId, {
-      updatedAt: Number(session.updatedAt ?? Date.now()),
-      messages: Array.isArray(session.messages) ? session.messages : [],
-    });
-  }
-
-  return nextStore;
-};
-
-let sessionMemoryStore = loadSessionMemoryStore();
-
-const persistSessionMemoryStore = () => {
-  writeJsonFileSync(
-    sessionMemoryPath(),
-    [...sessionMemoryStore.entries()].map(([sessionId, session]) => ({
-      sessionId,
-      updatedAt: session.updatedAt,
-      messages: session.messages,
-    }))
-  );
-};
+let configuredSessionMemoryStore = null;
+let sessionMemoryInitialized = false;
+let lastSessionCleanupAt = 0;
 
 const rewritePromptV1 = PromptTemplate.fromTemplate(
   `You rewrite follow-up questions into standalone retrieval queries for a document-grounded RAG system.
 Use the conversation only to resolve references, ellipsis, and document scope.
+Use long-term memory only as user-provided preferences or stable notes, never as document evidence.
 Do not add facts that were not already stated by the user or assistant.
 Keep the rewritten question concise and in the same language as the user's latest question.
 Return only the rewritten question with no explanation.
 
 Active documents:
 {documents}
+
+Long-term memory:
+{longTermMemory}
 
 Recent conversation:
 {recentConversation}
@@ -74,6 +53,7 @@ const rewritePromptV2 = ChatPromptTemplate.fromMessages([
     `You rewrite follow-up questions into standalone retrieval queries for a document-grounded RAG system.
 Follow these rules strictly:
 - Use the conversation only to resolve references, ellipsis, and document scope.
+- Use long-term memory only as user-provided preferences or stable notes, never as document evidence.
 - Keep the rewritten question concise and in the same language as the user's latest question.
 - Preserve ambiguity if the user was ambiguous.
 - Do not add facts, constraints, dates, or policy details that were not already stated by the user or assistant.
@@ -83,6 +63,9 @@ Follow these rules strictly:
     "human",
     `Active documents:
 {documents}
+
+Long-term memory:
+{longTermMemory}
 
 Recent conversation:
 {recentConversation}
@@ -100,6 +83,7 @@ const rewritePromptV3 = ChatPromptTemplate.fromMessages([
     `You rewrite follow-up questions into standalone retrieval queries for a document-grounded RAG system.
 Follow these rules strictly:
 - Use the conversation only to resolve references, ellipsis, and document scope.
+- Use long-term memory only as user-provided preferences or stable notes, never as document evidence.
 - Keep the rewritten question concise and in the same language as the user's latest question.
 - Preserve ambiguity if the user was ambiguous.
 - Do not add facts, constraints, dates, policy details, or comparisons that were not already stated by the user or assistant.
@@ -112,6 +96,9 @@ Follow these rules strictly:
     "human",
     `Active documents:
 {documents}
+
+Long-term memory:
+{longTermMemory}
 
 Recent conversation:
 {recentConversation}
@@ -131,12 +118,12 @@ JSON:
 
 2.
 Recent conversation:
-User [docs: plan-a.pdf, plan-b.pdf]: 对比这两份文档的远程办公政策。
-Assistant [docs: plan-a.pdf, plan-b.pdf] [mode: compare]: 两份文档都要求经理审批，但每周远程天数不同。
+User [docs: plan-a.pdf, plan-b.pdf]: 瀵规瘮杩欎袱浠芥枃妗ｇ殑杩滅▼鍔炲叕鏀跨瓥銆?
+Assistant [docs: plan-a.pdf, plan-b.pdf] [mode: compare]: 涓や唤鏂囨。閮借姹傜粡鐞嗗鎵癸紝浣嗘瘡鍛ㄨ繙绋嬪ぉ鏁颁笉鍚屻€?
 Latest user question:
-那第二个呢？
+閭ｇ浜屼釜鍛紵
 JSON:
-{{"rewritten_query":"第二份文档的远程办公政策是什么？","preserved_ambiguity":false}}
+{{"rewritten_query":"绗簩浠芥枃妗ｇ殑杩滅▼鍔炲叕鏀跨瓥鏄粈涔堬紵","preserved_ambiguity":false}}
 
 3.
 Recent conversation:
@@ -150,6 +137,18 @@ JSON:
 Now return JSON only.`,
   ],
 ]);
+
+const ensureTableName = () => {
+  const tableName = getSessionMemoryPostgresTable();
+
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    throw new Error(
+      `SESSION_MEMORY_POSTGRES_TABLE must be a simple PostgreSQL identifier. Received "${tableName}".`
+    );
+  }
+
+  return tableName;
+};
 
 const formatRewritePrompt = async (values) => {
   const promptVersion = getPromptVersion();
@@ -175,44 +174,181 @@ const trimMemoryText = (value = "", maxLength = MAX_MESSAGE_CHARS) => {
   return `${normalized.slice(0, maxLength - 3)}...`;
 };
 
-const cleanupExpiredSessions = () => {
-  const cutoff = Date.now() - SESSION_TTL_MS;
-  let changed = false;
+const normalizeSessionId = (sessionId) => String(sessionId ?? "").trim();
 
-  for (const [sessionId, session] of sessionMemoryStore.entries()) {
-    if ((session.updatedAt ?? 0) < cutoff) {
-      sessionMemoryStore.delete(sessionId);
-      changed = true;
-    }
-  }
+const sanitizeMessage = (message = {}) => {
+  const role = message.role === "assistant" ? "assistant" : "user";
+  const text = trimMemoryText(message.text ?? "", role === "user" ? 400 : MAX_MESSAGE_CHARS);
+  const resolvedQuery = message.resolvedQuery
+    ? trimMemoryText(message.resolvedQuery, 500)
+    : null;
+  const docLabels = Array.isArray(message.docLabels)
+    ? message.docLabels
+        .map((label) => trimMemoryText(label, 120))
+        .filter(Boolean)
+        .slice(0, 10)
+    : [];
+  const routeMode = message.routeMode ? String(message.routeMode).trim() : null;
 
-  if (changed) {
-    persistSessionMemoryStore();
-  }
+  return {
+    role,
+    text,
+    resolvedQuery,
+    docLabels,
+    routeMode,
+  };
 };
 
-const getSession = (sessionId) => {
-  if (!sessionId) {
+const sanitizeSessionMessages = (messages = []) =>
+  (Array.isArray(messages) ? messages : [])
+    .map((message) => sanitizeMessage(message))
+    .filter((message) => message.text)
+    .slice(-MAX_RECENT_MESSAGES);
+
+const mapRowToSession = (row = {}) => ({
+  updatedAt: new Date(row.updated_at ?? Date.now()).getTime(),
+  messages: sanitizeSessionMessages(row.messages ?? []),
+});
+
+const shouldRunCleanup = () =>
+  Date.now() - lastSessionCleanupAt >= SESSION_CLEANUP_INTERVAL_MS;
+
+const createDefaultStore = () => ({
+  async initialize() {
+    await runPostgresMigrations();
+    return true;
+  },
+
+  async cleanupExpired() {
+    if (!shouldRunCleanup()) {
+      return 0;
+    }
+
+    const tableName = ensureTableName();
+    lastSessionCleanupAt = Date.now();
+    const result = await queryPostgres(
+      `
+        DELETE FROM ${tableName}
+        WHERE updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+      `,
+      [SESSION_TTL_MS]
+    );
+
+    return Number(result.rowCount ?? 0);
+  },
+
+  async get(sessionId) {
+    const normalizedSessionId = normalizeSessionId(sessionId);
+
+    if (!normalizedSessionId) {
+      return null;
+    }
+
+    await this.initialize();
+    await this.cleanupExpired();
+
+    const tableName = ensureTableName();
+    const result = await queryPostgres(
+      `
+        SELECT session_id, updated_at, messages
+        FROM ${tableName}
+        WHERE session_id = $1
+        LIMIT 1
+      `,
+      [normalizedSessionId]
+    );
+
+    return result.rows[0] ? mapRowToSession(result.rows[0]) : null;
+  },
+
+  async upsert({ sessionId, messages, updatedAt = Date.now() }) {
+    const normalizedSessionId = normalizeSessionId(sessionId);
+
+    if (!normalizedSessionId) {
+      return null;
+    }
+
+    await this.initialize();
+    await this.cleanupExpired();
+
+    const tableName = ensureTableName();
+    const sanitizedMessages = sanitizeSessionMessages(messages);
+    const result = await queryPostgres(
+      `
+        INSERT INTO ${tableName} (session_id, updated_at, messages)
+        VALUES ($1, $2, $3::jsonb)
+        ON CONFLICT (session_id)
+        DO UPDATE SET
+          updated_at = EXCLUDED.updated_at,
+          messages = EXCLUDED.messages
+        RETURNING session_id, updated_at, messages
+      `,
+      [
+        normalizedSessionId,
+        new Date(updatedAt).toISOString(),
+        JSON.stringify(sanitizedMessages),
+      ]
+    );
+
+    return result.rows[0] ? mapRowToSession(result.rows[0]) : null;
+  },
+
+  async delete(sessionId) {
+    const normalizedSessionId = normalizeSessionId(sessionId);
+
+    if (!normalizedSessionId) {
+      return false;
+    }
+
+    await this.initialize();
+    const tableName = ensureTableName();
+    const result = await queryPostgres(
+      `
+        DELETE FROM ${tableName}
+        WHERE session_id = $1
+      `,
+      [normalizedSessionId]
+    );
+
+    return Number(result.rowCount ?? 0) > 0;
+  },
+
+  async clearAll() {
+    await this.initialize();
+    const tableName = ensureTableName();
+    const result = await queryPostgres(`DELETE FROM ${tableName}`);
+    return Number(result.rowCount ?? 0);
+  },
+});
+
+const getSessionMemoryStore = () =>
+  configuredSessionMemoryStore ?? createDefaultStore();
+
+const initializeSessionMemoryStore = async () => {
+  if (sessionMemoryInitialized) {
+    return true;
+  }
+
+  const store = getSessionMemoryStore();
+
+  if (store.initialize) {
+    await store.initialize();
+  }
+
+  sessionMemoryInitialized = true;
+  return true;
+};
+
+const getSession = async (sessionId) => {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+
+  if (!normalizedSessionId) {
     return null;
   }
 
-  cleanupExpiredSessions();
-
-  return sessionMemoryStore.get(sessionId) ?? null;
-};
-
-const getOrCreateSession = (sessionId) => {
-  cleanupExpiredSessions();
-
-  if (!sessionMemoryStore.has(sessionId)) {
-    sessionMemoryStore.set(sessionId, {
-      messages: [],
-      updatedAt: Date.now(),
-    });
-    persistSessionMemoryStore();
-  }
-
-  return sessionMemoryStore.get(sessionId);
+  await initializeSessionMemoryStore();
+  const store = getSessionMemoryStore();
+  return store.get ? store.get(normalizedSessionId) : null;
 };
 
 const formatRecentConversation = (messages) =>
@@ -249,7 +385,10 @@ const sanitizeRewriteQueryText = (rewrittenQuery, fallbackQuery) => {
   const normalized = String(rewrittenQuery ?? "")
     .trim()
     .replace(/^(```(?:text)?|```)/gi, "")
-    .replace(/^(standalone retrieval question|standalone question|rewritten question|question)\s*:\s*/i, "")
+    .replace(
+      /^(standalone retrieval question|standalone question|rewritten question|question)\s*:\s*/i,
+      ""
+    )
     .trim();
   const finalQuery =
     normalized
@@ -309,12 +448,21 @@ const sanitizeRewrittenQuery = (rewrittenResponse, fallbackQuery) => {
   return sanitizeRewriteQueryText(rewrittenResponse, fallbackQuery);
 };
 
+export const initializeSessionMemory = async () => initializeSessionMemoryStore();
+
+export const configureSessionMemoryStore = (store) => {
+  configuredSessionMemoryStore = store ?? null;
+  sessionMemoryInitialized = false;
+  lastSessionCleanupAt = 0;
+};
+
 export const resolveQueryWithSessionMemory = async ({
   sessionId,
   query,
   documents,
+  longTermMemory = "",
 }) => {
-  const session = getSession(sessionId);
+  const session = await getSession(sessionId);
 
   if (!shouldRewriteQuestion({ query, session })) {
     return {
@@ -329,6 +477,7 @@ export const resolveQueryWithSessionMemory = async ({
         documents.length > 0
           ? documents.map((document) => document.fileName).join(", ")
           : "No active documents",
+      longTermMemory: longTermMemory || "No long-term memory",
       recentConversation: formatRecentConversation(
         session.messages.slice(-MAX_RECENT_MESSAGES)
       ),
@@ -351,7 +500,7 @@ export const resolveQueryWithSessionMemory = async ({
   }
 };
 
-export const recordSessionTurn = ({
+export const recordSessionTurn = async ({
   sessionId,
   query,
   resolvedQuery,
@@ -359,47 +508,68 @@ export const recordSessionTurn = ({
   documents,
   routeMode,
 }) => {
-  if (!sessionId) {
-    return;
+  const normalizedSessionId = normalizeSessionId(sessionId);
+
+  if (!normalizedSessionId) {
+    return null;
   }
 
-  const session = getOrCreateSession(sessionId);
+  await initializeSessionMemoryStore();
+  const store = getSessionMemoryStore();
+  const existingSession = store.get ? await store.get(normalizedSessionId) : null;
   const docLabels = documents.map((document) => document.fileName);
+  const nextMessages = [
+    ...(existingSession?.messages ?? []),
+    {
+      role: "user",
+      text: trimMemoryText(query, 400),
+      resolvedQuery:
+        resolvedQuery && resolvedQuery !== query
+          ? trimMemoryText(resolvedQuery, 500)
+          : null,
+      docLabels,
+    },
+    {
+      role: "assistant",
+      text: trimMemoryText(answer),
+      docLabels,
+      routeMode,
+    },
+  ].slice(-MAX_RECENT_MESSAGES);
 
-  session.messages.push({
-    role: "user",
-    text: trimMemoryText(query, 400),
-    resolvedQuery:
-      resolvedQuery && resolvedQuery !== query
-        ? trimMemoryText(resolvedQuery, 500)
-        : null,
-    docLabels,
-  });
-  session.messages.push({
-    role: "assistant",
-    text: trimMemoryText(answer),
-    docLabels,
-    routeMode,
-  });
-  session.messages = session.messages.slice(-MAX_RECENT_MESSAGES);
-  session.updatedAt = Date.now();
-  persistSessionMemoryStore();
+  return store.upsert
+    ? store.upsert({
+        sessionId: normalizedSessionId,
+        messages: nextMessages,
+        updatedAt: Date.now(),
+      })
+    : null;
 };
 
-export const clearSessionMemory = (sessionId) => {
-  if (!sessionId) {
+export const clearSessionMemory = async (sessionId) => {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+
+  if (!normalizedSessionId) {
     return false;
   }
 
-  const deleted = sessionMemoryStore.delete(sessionId);
-
-  if (deleted) {
-    persistSessionMemoryStore();
-  }
-
-  return deleted;
+  await initializeSessionMemoryStore();
+  const store = getSessionMemoryStore();
+  return store.delete ? store.delete(normalizedSessionId) : false;
 };
 
 export const resetSessionMemory = () => {
-  sessionMemoryStore = loadSessionMemoryStore();
+  sessionMemoryInitialized = false;
+  lastSessionCleanupAt = 0;
+};
+
+export const resetSessionMemoryStore = async () => {
+  const store = configuredSessionMemoryStore;
+
+  if (store?.reset) {
+    await store.reset();
+  }
+
+  configuredSessionMemoryStore = null;
+  resetSessionMemory();
 };

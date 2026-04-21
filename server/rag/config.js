@@ -127,3 +127,38 @@ export const getMinQueryTermCoverage = () =>
 
 export const isNearDuplicateGuardEnabled = () =>
   toBoolean(process.env.RAG_NEAR_DUPLICATE_GUARD_ENABLED, true);
+
+export const isLongMemoryEnabled = () =>
+  toBoolean(process.env.RAG_LONG_MEMORY_ENABLED, false);
+
+export const getPostgresDatabaseUrl = () =>
+  process.env.POSTGRES_DATABASE_URL || process.env.LONG_MEMORY_DATABASE_URL || "";
+
+export const isPostgresSslEnabled = () =>
+  toBoolean(
+    process.env.POSTGRES_SSL_ENABLED,
+    toBoolean(process.env.LONG_MEMORY_POSTGRES_SSL_ENABLED, false)
+  );
+
+export const getLongMemoryDatabaseUrl = () =>
+  getPostgresDatabaseUrl();
+
+export const getLongMemoryPostgresTable = () =>
+  (process.env.LONG_MEMORY_POSTGRES_TABLE || "long_memory_items").trim();
+
+export const isLongMemoryPostgresSslEnabled = () =>
+  isPostgresSslEnabled();
+
+export const getDocumentsPostgresTable = () =>
+  (process.env.DOCUMENTS_POSTGRES_TABLE || "rag_documents").trim();
+
+export const getSessionMemoryPostgresTable = () =>
+  (process.env.SESSION_MEMORY_POSTGRES_TABLE || "rag_session_memory").trim();
+
+export const isApiAuthEnabled = () =>
+  toBoolean(process.env.API_AUTH_ENABLED, false);
+
+export const getApiAuthToken = () => process.env.API_AUTH_TOKEN || "";
+
+export const isStartupHealthStrict = () =>
+  toBoolean(process.env.STARTUP_HEALTH_STRICT, false);

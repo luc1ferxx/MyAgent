@@ -1,43 +1,70 @@
-import { fileExistsSync, getRagDataPath, readJsonFileSync, writeJsonFileSync } from "./storage.js";
+import { readFile } from "fs/promises";
+import { getDocumentsPostgresTable } from "./config.js";
+import { runPostgresMigrations } from "./db-migrations.js";
+import { buildPublicFilePath } from "./document-utils.js";
+import {
+  fileExistsSync,
+  getRagDataPath,
+  readJsonFileSync,
+} from "./storage.js";
+import { queryPostgres } from "./postgres.js";
+
+const TABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+let configuredDocumentRegistryStore = null;
+let documentRegistry = new Map();
+let documentRegistryInitialized = false;
+let legacyImportAttempted = false;
 
 const registryPath = () => getRagDataPath("documents.json");
 
-const toStoredDocument = (document = {}) => ({
-  docId: String(document.docId ?? ""),
-  fileName: String(document.fileName ?? ""),
-  filePath: String(document.filePath ?? ""),
-  publicFilePath: String(document.publicFilePath ?? ""),
-  chunkCount: Number.parseInt(document.chunkCount ?? "0", 10),
-  pageCount: Number.parseInt(document.pageCount ?? "0", 10),
-  uploadedAt: document.uploadedAt ?? new Date().toISOString(),
-});
+const toPositiveInteger = (value, fallbackValue = 0) => {
+  const parsedValue = Number.parseInt(value ?? fallbackValue, 10);
+  return Number.isInteger(parsedValue) && parsedValue >= 0 ? parsedValue : fallbackValue;
+};
 
-const loadDocumentRegistry = () => {
-  const entries = readJsonFileSync(registryPath(), []);
-  const nextRegistry = new Map();
+const ensureTableName = () => {
+  const tableName = getDocumentsPostgresTable();
 
-  for (const entry of entries) {
-    const document = toStoredDocument(entry);
-
-    if (!document.docId || !document.fileName || !document.filePath) {
-      continue;
-    }
-
-    if (!fileExistsSync(document.filePath)) {
-      continue;
-    }
-
-    nextRegistry.set(document.docId, document);
+  if (!TABLE_NAME_PATTERN.test(tableName)) {
+    throw new Error(
+      `DOCUMENTS_POSTGRES_TABLE must be a simple PostgreSQL identifier. Received "${tableName}".`
+    );
   }
 
-  return nextRegistry;
+  return tableName;
 };
 
-let documentRegistry = loadDocumentRegistry();
+const normalizeDocId = (docId) => String(docId ?? "").trim();
 
-const persistDocumentRegistry = () => {
-  writeJsonFileSync(registryPath(), [...documentRegistry.values()]);
+const toStoredDocument = (document = {}) => {
+  const docId = normalizeDocId(document.docId);
+  const publicFilePath = buildPublicFilePath(docId);
+
+  return {
+    docId,
+    fileName: String(document.fileName ?? "").trim(),
+    filePath: publicFilePath,
+    publicFilePath,
+    mimeType: String(document.mimeType ?? "application/pdf").trim() || "application/pdf",
+    fileSize: toPositiveInteger(document.fileSize),
+    chunkCount: toPositiveInteger(document.chunkCount),
+    pageCount: toPositiveInteger(document.pageCount),
+    uploadedAt: document.uploadedAt ?? new Date().toISOString(),
+    storageBackend: "postgresql",
+  };
 };
+
+const mapRowToStoredDocument = (row = {}) =>
+  toStoredDocument({
+    docId: row.doc_id,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    fileSize: row.file_size,
+    chunkCount: row.chunk_count,
+    pageCount: row.page_count,
+    uploadedAt: row.uploaded_at,
+  });
 
 const toPublicDocument = (document) =>
   document
@@ -46,15 +73,232 @@ const toPublicDocument = (document) =>
         fileName: document.fileName,
         filePath: document.filePath,
         publicFilePath: document.publicFilePath,
+        mimeType: document.mimeType,
+        fileSize: document.fileSize,
         chunkCount: document.chunkCount,
         pageCount: document.pageCount,
         uploadedAt: document.uploadedAt,
+        storageBackend: document.storageBackend,
       }
     : null;
 
+const loadLegacyDocuments = () => {
+  const entries = readJsonFileSync(registryPath(), []);
+
+  return entries
+    .map((entry) => ({
+      docId: normalizeDocId(entry.docId),
+      fileName: String(entry.fileName ?? "").trim(),
+      sourceFilePath: String(entry.filePath ?? "").trim(),
+      mimeType: String(entry.mimeType ?? "application/pdf").trim() || "application/pdf",
+      fileSize: toPositiveInteger(entry.fileSize),
+      chunkCount: toPositiveInteger(entry.chunkCount),
+      pageCount: toPositiveInteger(entry.pageCount),
+      uploadedAt: entry.uploadedAt ?? new Date().toISOString(),
+    }))
+    .filter(
+      (entry) => entry.docId && entry.fileName && entry.sourceFilePath && fileExistsSync(entry.sourceFilePath)
+    );
+};
+
+const resolveFileBuffer = async ({ fileBuffer = null, sourceFilePath = "" } = {}) => {
+  if (Buffer.isBuffer(fileBuffer)) {
+    return fileBuffer;
+  }
+
+  if (fileBuffer instanceof Uint8Array) {
+    return Buffer.from(fileBuffer);
+  }
+
+  if (sourceFilePath) {
+    return readFile(sourceFilePath);
+  }
+
+  throw new Error("Document ingestion requires a PDF buffer or source file path.");
+};
+
+const createDefaultStore = () => ({
+  async initialize() {
+    await runPostgresMigrations();
+
+    if (legacyImportAttempted) {
+      return true;
+    }
+
+    const legacyDocuments = loadLegacyDocuments();
+    legacyImportAttempted = true;
+
+    if (legacyDocuments.length === 0) {
+      return true;
+    }
+
+    const tableName = ensureTableName();
+    const existing = await queryPostgres(
+      `
+        SELECT doc_id
+        FROM ${tableName}
+        WHERE doc_id = ANY($1::text[])
+      `,
+      [legacyDocuments.map((document) => document.docId)]
+    );
+    const existingDocIds = new Set(existing.rows.map((row) => String(row.doc_id)));
+
+    for (const document of legacyDocuments) {
+      if (existingDocIds.has(document.docId)) {
+        continue;
+      }
+
+      const fileBuffer = await resolveFileBuffer({
+        sourceFilePath: document.sourceFilePath,
+      });
+
+      await this.upsert({
+        ...document,
+        fileBuffer,
+        fileSize: document.fileSize || fileBuffer.byteLength,
+      });
+    }
+
+    return true;
+  },
+
+  async list() {
+    const tableName = ensureTableName();
+    const result = await queryPostgres(
+      `
+        SELECT doc_id, file_name, mime_type, file_size, chunk_count, page_count, uploaded_at
+        FROM ${tableName}
+        ORDER BY uploaded_at ASC, doc_id ASC
+      `
+    );
+
+    return result.rows.map(mapRowToStoredDocument);
+  },
+
+  async upsert(document) {
+    const normalizedDocument = toStoredDocument(document);
+
+    if (!normalizedDocument.docId || !normalizedDocument.fileName) {
+      throw new Error("Document registration requires both docId and fileName.");
+    }
+
+    const tableName = ensureTableName();
+    const fileBuffer = await resolveFileBuffer({
+      fileBuffer: document.fileBuffer,
+      sourceFilePath: document.sourceFilePath,
+    });
+    const fileSize = normalizedDocument.fileSize || fileBuffer.byteLength;
+    const result = await queryPostgres(
+      `
+        INSERT INTO ${tableName} (
+          doc_id,
+          file_name,
+          mime_type,
+          file_size,
+          file_bytes,
+          chunk_count,
+          page_count,
+          uploaded_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (doc_id)
+        DO UPDATE SET
+          file_name = EXCLUDED.file_name,
+          mime_type = EXCLUDED.mime_type,
+          file_size = EXCLUDED.file_size,
+          file_bytes = EXCLUDED.file_bytes,
+          chunk_count = EXCLUDED.chunk_count,
+          page_count = EXCLUDED.page_count,
+          uploaded_at = EXCLUDED.uploaded_at
+        RETURNING doc_id, file_name, mime_type, file_size, chunk_count, page_count, uploaded_at
+      `,
+      [
+        normalizedDocument.docId,
+        normalizedDocument.fileName,
+        normalizedDocument.mimeType,
+        fileSize,
+        fileBuffer,
+        normalizedDocument.chunkCount,
+        normalizedDocument.pageCount,
+        normalizedDocument.uploadedAt,
+      ]
+    );
+
+    return mapRowToStoredDocument(result.rows[0]);
+  },
+
+  async getFile(docId) {
+    const normalizedDocId = normalizeDocId(docId);
+
+    if (!normalizedDocId) {
+      return null;
+    }
+
+    const tableName = ensureTableName();
+    const result = await queryPostgres(
+      `
+        SELECT doc_id, file_name, mime_type, file_size, file_bytes, chunk_count, page_count, uploaded_at
+        FROM ${tableName}
+        WHERE doc_id = $1
+        LIMIT 1
+      `,
+      [normalizedDocId]
+    );
+    const row = result.rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      document: mapRowToStoredDocument(row),
+      fileBuffer: Buffer.from(row.file_bytes ?? []),
+      mimeType: String(row.mime_type ?? "application/pdf"),
+      fileName: String(row.file_name ?? "document.pdf"),
+      fileSize: toPositiveInteger(row.file_size),
+    };
+  },
+
+  async delete(docId) {
+    const normalizedDocId = normalizeDocId(docId);
+
+    if (!normalizedDocId) {
+      return null;
+    }
+
+    const tableName = ensureTableName();
+    const result = await queryPostgres(
+      `
+        DELETE FROM ${tableName}
+        WHERE doc_id = $1
+        RETURNING doc_id, file_name, mime_type, file_size, chunk_count, page_count, uploaded_at
+      `,
+      [normalizedDocId]
+    );
+
+    return result.rows[0] ? mapRowToStoredDocument(result.rows[0]) : null;
+  },
+
+  async clear() {
+    const tableName = ensureTableName();
+    await queryPostgres(`DELETE FROM ${tableName}`);
+    return true;
+  },
+});
+
+const getDocumentRegistryStore = () =>
+  configuredDocumentRegistryStore ?? createDefaultStore();
+
+const setDocumentRegistry = (documents = []) => {
+  documentRegistry = new Map(
+    documents.map((document) => [document.docId, toStoredDocument(document)])
+  );
+  documentRegistryInitialized = true;
+};
+
 export const normalizeDocIds = (docIds) => {
   if (Array.isArray(docIds)) {
-    return [...new Set(docIds.map((docId) => docId?.trim()).filter(Boolean))];
+    return [...new Set(docIds.map((docId) => normalizeDocId(docId)).filter(Boolean))];
   }
 
   if (typeof docIds === "string") {
@@ -62,7 +306,7 @@ export const normalizeDocIds = (docIds) => {
       ...new Set(
         docIds
           .split(",")
-          .map((docId) => docId.trim())
+          .map((docId) => normalizeDocId(docId))
           .filter(Boolean)
       ),
     ];
@@ -71,16 +315,47 @@ export const normalizeDocIds = (docIds) => {
   return [];
 };
 
-export const registerDocument = (document) => {
-  const nextDocument = toStoredDocument(document);
-  documentRegistry.set(nextDocument.docId, nextDocument);
-  persistDocumentRegistry();
-  return getDocument(document.docId);
+export const initializeDocumentRegistry = async () => {
+  if (documentRegistryInitialized) {
+    return listDocuments();
+  }
+
+  const store = getDocumentRegistryStore();
+
+  if (store.initialize) {
+    await store.initialize();
+  }
+
+  const documents = store.list ? await store.list() : [];
+  setDocumentRegistry(documents);
+  return listDocuments();
 };
 
-export const hasDocument = (docId) => documentRegistry.has(docId);
+export const configureDocumentRegistryStore = (store) => {
+  configuredDocumentRegistryStore = store ?? null;
+  documentRegistry = new Map();
+  documentRegistryInitialized = false;
+  legacyImportAttempted = false;
+};
 
-export const getStoredDocument = (docId) => documentRegistry.get(docId) ?? null;
+export const registerDocument = async (document) => {
+  if (!documentRegistryInitialized) {
+    await initializeDocumentRegistry();
+  }
+
+  const store = getDocumentRegistryStore();
+  const storedDocument = store.upsert
+    ? await store.upsert(document)
+    : toStoredDocument(document);
+
+  documentRegistry.set(storedDocument.docId, toStoredDocument(storedDocument));
+  return getDocument(storedDocument.docId);
+};
+
+export const hasDocument = (docId) => documentRegistry.has(normalizeDocId(docId));
+
+export const getStoredDocument = (docId) =>
+  documentRegistry.get(normalizeDocId(docId)) ?? null;
 
 export const getDocument = (docId) => toPublicDocument(getStoredDocument(docId));
 
@@ -94,25 +369,55 @@ export const listDocuments = () =>
     .sort((left, right) => left.uploadedAt.localeCompare(right.uploadedAt))
     .map((document) => toPublicDocument(document));
 
-export const deleteDocument = (docId) => {
-  const document = getStoredDocument(docId);
+export const getDocumentFile = async (docId) => {
+  const store = getDocumentRegistryStore();
 
-  if (!document) {
+  return store.getFile ? store.getFile(docId) : null;
+};
+
+export const deleteDocument = async (docId) => {
+  const storedDocument = getStoredDocument(docId);
+
+  if (!storedDocument) {
     return null;
   }
 
-  documentRegistry.delete(docId);
-  persistDocumentRegistry();
-  return toPublicDocument(document);
+  const store = getDocumentRegistryStore();
+
+  if (store.delete) {
+    await store.delete(docId);
+  }
+
+  documentRegistry.delete(normalizeDocId(docId));
+  return toPublicDocument(storedDocument);
 };
 
-export const clearDocuments = () => {
+export const clearDocuments = async () => {
   const documents = listDocuments();
+  const store = getDocumentRegistryStore();
+
+  if (store.clear) {
+    await store.clear();
+  }
+
   documentRegistry = new Map();
-  persistDocumentRegistry();
+  documentRegistryInitialized = true;
   return documents;
 };
 
-export const resetDocumentRegistry = () => {
-  documentRegistry = loadDocumentRegistry();
+export const resetDocumentRegistry = async () => {
+  documentRegistry = new Map();
+  documentRegistryInitialized = false;
+  legacyImportAttempted = false;
+};
+
+export const resetDocumentRegistryStore = async () => {
+  const store = configuredDocumentRegistryStore;
+
+  if (store?.reset) {
+    await store.reset();
+  }
+
+  await resetDocumentRegistry();
+  configuredDocumentRegistryStore = null;
 };

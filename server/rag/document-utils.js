@@ -1,4 +1,7 @@
-import path from "path";
+export const buildPublicFilePath = (docId = "") => {
+  const normalizedDocId = String(docId ?? "").trim();
 
-export const buildPublicFilePath = (filePath = "") =>
-  filePath ? `uploads/${path.basename(filePath).replace(/\\/g, "/")}` : "";
+  return normalizedDocId
+    ? `documents/${encodeURIComponent(normalizedDocId)}/file`
+    : "";
+};

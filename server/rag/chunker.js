@@ -129,7 +129,6 @@ const buildChunkText = (sectionHeading, paragraphs) =>
 const buildChunkRecord = ({
   docId,
   fileName,
-  filePath,
   publicFilePath,
   pageNumber,
   chunkIndex,
@@ -141,7 +140,7 @@ const buildChunkRecord = ({
   metadata: {
     docId,
     fileName,
-    filePath,
+    filePath: publicFilePath,
     publicFilePath,
     pageNumber,
     chunkIndex,
@@ -152,7 +151,6 @@ const buildChunkRecord = ({
 const chunkPageWithFixedWindows = ({
   docId,
   fileName,
-  filePath,
   publicFilePath,
   page,
   chunkSize,
@@ -184,7 +182,6 @@ const chunkPageWithFixedWindows = ({
       buildChunkRecord({
         docId,
         fileName,
-        filePath,
         publicFilePath,
         pageNumber: page.pageNumber,
         chunkIndex,
@@ -207,7 +204,6 @@ const chunkPageWithFixedWindows = ({
 const chunkPageWithStructure = ({
   docId,
   fileName,
-  filePath,
   publicFilePath,
   page,
   chunkSize,
@@ -239,7 +235,6 @@ const chunkPageWithStructure = ({
       buildChunkRecord({
         docId,
         fileName,
-        filePath,
         publicFilePath,
         pageNumber: page.pageNumber,
         chunkIndex,
@@ -280,8 +275,9 @@ const chunkPageWithStructure = ({
   };
 };
 
-export const chunkDocument = ({ docId, fileName, filePath, pages }) => {
-  const publicFilePath = buildPublicFilePath(filePath);
+export const chunkDocument = ({ docId, fileName, publicFilePath, pages }) => {
+  const resolvedPublicFilePath =
+    publicFilePath || buildPublicFilePath(docId);
   const chunkSize = getChunkSize();
   const chunkOverlap = getChunkOverlap();
   const chunkStrategy = getChunkStrategy();
@@ -294,8 +290,7 @@ export const chunkDocument = ({ docId, fileName, filePath, pages }) => {
         ? chunkPageWithFixedWindows({
             docId,
             fileName,
-            filePath,
-            publicFilePath,
+            publicFilePath: resolvedPublicFilePath,
             page,
             chunkSize,
             chunkOverlap,
@@ -304,8 +299,7 @@ export const chunkDocument = ({ docId, fileName, filePath, pages }) => {
         : chunkPageWithStructure({
             docId,
             fileName,
-            filePath,
-            publicFilePath,
+            publicFilePath: resolvedPublicFilePath,
             page,
             chunkSize,
             chunkOverlap,
