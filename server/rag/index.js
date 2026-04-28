@@ -1,6 +1,14 @@
+import { randomUUID } from "node:crypto";
 import { Document } from "@langchain/core/documents";
 import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
 import { chunkDocument } from "./chunker.js";
+import {
+  getRerankCandidateMultiplier,
+  getRerankWeight,
+  getRetrievalTopK,
+  isHybridRetrievalEnabled,
+  isRerankEnabled,
+} from "./config.js";
 import { analyzeComparison } from "./comparison-engine.js";
 import { assessComparisonConfidence, assessQaConfidence } from "./confidence.js";
 import {
@@ -34,6 +42,12 @@ import {
   recordSessionTurn,
   resolveQueryWithSessionMemory,
 } from "./memory.js";
+import {
+  buildBundleTrace,
+  buildConfidenceTrace,
+  buildResultTrace,
+  recordRagTrace,
+} from "./observability.js";
 import { embedQuery } from "./openai.js";
 import { routeQuery } from "./query-router.js";
 import { retrieveGlobalContext } from "./retrievers/global-retriever.js";
@@ -223,6 +237,64 @@ const buildQaGapPlan = async ({
   );
 };
 
+const buildRetrievalConfigTrace = () => ({
+  hybridEnabled: isHybridRetrievalEnabled(),
+  rerankEnabled: isRerankEnabled(),
+  retrievalTopK: getRetrievalTopK(),
+  rerankCandidateMultiplier: getRerankCandidateMultiplier(),
+  rerankWeight: getRerankWeight(),
+});
+
+const buildPerDocumentResultsTrace = (docIds, perDocumentResults) =>
+  Object.fromEntries(
+    docIds.map((docId) => [
+      docId,
+      (perDocumentResults.get(docId) ?? []).map((result) => buildResultTrace(result)),
+    ])
+  );
+
+const buildAlignmentSummaryTrace = (alignment = {}) => ({
+  missingDocuments: alignment.missingDocuments ?? [],
+  sharedTerms: alignment.sharedTerms ?? [],
+  perDocumentEvidenceCounts: (alignment.perDocument ?? []).map((entry) => ({
+    docId: entry.docId,
+    fileName: entry.fileName,
+    evidenceCount: entry.results.length,
+  })),
+});
+
+const buildComparisonPairTrace = (pair = {}) => ({
+  leftDocId: pair.leftDocId ?? null,
+  leftFileName: pair.leftFileName ?? null,
+  rightDocId: pair.rightDocId ?? null,
+  rightFileName: pair.rightFileName ?? null,
+  termJaccard: pair.termJaccard ?? null,
+  sentenceOverlap: pair.sentenceOverlap ?? null,
+  nearDuplicate: Boolean(pair.nearDuplicate),
+  strongNearDuplicate: Boolean(pair.strongNearDuplicate),
+  explicitConflict: Boolean(pair.explicitConflict),
+  numericTokensOnlyInLeft: pair.numericTokensOnlyInLeft ?? [],
+  numericTokensOnlyInRight: pair.numericTokensOnlyInRight ?? [],
+});
+
+const buildComparisonAnalysisSummaryTrace = (analysis = {}) => ({
+  evidenceBalance: analysis.evidenceBalance ?? null,
+  nearDuplicatePairs: (analysis.nearDuplicatePairs ?? []).map(
+    buildComparisonPairTrace
+  ),
+  explicitConflictPairs: (analysis.explicitConflictPairs ?? []).map(
+    buildComparisonPairTrace
+  ),
+  shouldShortCircuitNoMaterialDifference: Boolean(
+    analysis.shouldShortCircuitNoMaterialDifference
+  ),
+});
+
+const buildErrorTrace = (error) => ({
+  name: error?.name ?? "Error",
+  message: error?.message ?? String(error),
+});
+
 export const deleteDocument = async (docId, { deleteFile = true } = {}) => {
   const storedDocument = getStoredDocument(docId);
 
@@ -252,170 +324,245 @@ const chat = async (docIds, query, options = {}) => {
     userId = null,
     includeRetrievedContexts = false,
   } = options;
-  const normalizedDocIds = normalizeDocIds(docIds);
+  const traceId = randomUUID();
+  const timestamp = new Date().toISOString();
+  const startedAt = Date.now();
+  let normalizedDocIds = [];
+  let resolvedQuery = null;
+  let routeMode = null;
 
-  if (normalizedDocIds.length === 0) {
-    const error = new Error("At least one document is required.");
-    error.status = 404;
-    throw error;
-  }
-
-  await initializeDocumentRegistry();
-  ensureDocumentsExist(normalizedDocIds);
-
-  const selectedDocuments = getDocuments(normalizedDocIds);
-  let longMemoryContext = {
-    memories: [],
-    rewriteBlock: "",
-    answerBlock: "",
-  };
+  const buildBaseTraceEvent = (extraFields = {}) => ({
+    traceId,
+    timestamp,
+    routeMode,
+    query,
+    resolvedQuery,
+    docIds: normalizedDocIds,
+    ...extraFields,
+    latencyMs: Date.now() - startedAt,
+  });
 
   try {
-    longMemoryContext = await getLongMemoryContext({
-      userId,
-      query,
-    });
-  } catch (error) {
-    console.error("Failed to load long-term memory context.", error);
-  }
+    normalizedDocIds = normalizeDocIds(docIds);
 
-  const memoryResolution = await resolveQueryWithSessionMemory({
-    sessionId,
-    query,
-    documents: selectedDocuments,
-    longTermMemory: longMemoryContext.rewriteBlock,
-  });
-  const resolvedQuery = memoryResolution.resolvedQuery;
-  const buildResponse = async (response) => {
-    const abstained = Boolean(response.abstained);
-    const result = {
-      ...response,
-      abstained,
-      abstainReason: abstained ? response.abstainReason ?? response.text : null,
-      resolvedQuery,
-      memoryApplied: memoryResolution.memoryApplied,
+    if (normalizedDocIds.length === 0) {
+      const error = new Error("At least one document is required.");
+      error.status = 404;
+      throw error;
+    }
+
+    await initializeDocumentRegistry();
+    ensureDocumentsExist(normalizedDocIds);
+
+    const selectedDocuments = getDocuments(normalizedDocIds);
+    let longMemoryContext = {
+      memories: [],
+      rewriteBlock: "",
+      answerBlock: "",
     };
 
-    if (!includeRetrievedContexts) {
-      delete result.retrievedContexts;
+    try {
+      longMemoryContext = await getLongMemoryContext({
+        userId,
+        query,
+      });
+    } catch (error) {
+      console.error("Failed to load long-term memory context.", error);
     }
 
-    await recordSessionTurn({
+    const memoryResolution = await resolveQueryWithSessionMemory({
       sessionId,
       query,
-      resolvedQuery,
-      answer: result.text,
       documents: selectedDocuments,
-      routeMode: route.mode,
+      longTermMemory: longMemoryContext.rewriteBlock,
     });
+    resolvedQuery = memoryResolution.resolvedQuery;
 
-    if (userId) {
-      try {
-        await recordLongMemoryFromUserMessage({
-          userId,
-          query,
-        });
-      } catch (error) {
-        console.error("Failed to persist long-term memory from user message.", error);
+    const buildResponse = async (response) => {
+      const abstained = Boolean(response.abstained);
+      const result = {
+        ...response,
+        abstained,
+        abstainReason: abstained ? response.abstainReason ?? response.text : null,
+        resolvedQuery,
+        memoryApplied: memoryResolution.memoryApplied,
+      };
+
+      if (!includeRetrievedContexts) {
+        delete result.retrievedContexts;
       }
+
+      await recordSessionTurn({
+        sessionId,
+        query,
+        resolvedQuery,
+        answer: result.text,
+        documents: selectedDocuments,
+        routeMode,
+      });
+
+      if (userId) {
+        try {
+          await recordLongMemoryFromUserMessage({
+            userId,
+            query,
+          });
+        } catch (error) {
+          console.error("Failed to persist long-term memory from user message.", error);
+        }
+      }
+
+      return result;
+    };
+
+    const recordResponseTrace = async ({ response, traceFields }) => {
+      const result = await buildResponse(response);
+
+      await recordRagTrace(
+        buildBaseTraceEvent({
+          ...traceFields,
+          abstained: result.abstained,
+          abstainReason: result.abstainReason,
+          answerLength: result.text?.length ?? 0,
+          error: null,
+        })
+      );
+
+      return result;
+    };
+
+    const route = routeQuery({
+      query: resolvedQuery,
+      docIds: normalizedDocIds,
+    });
+    routeMode = route.mode;
+    const queryVector = await embedQuery(resolvedQuery);
+
+    if (routeMode === "compare") {
+      const perDocumentResults = await retrievePerDocumentContext({
+        queryVector,
+        queryText: resolvedQuery,
+        docIds: normalizedDocIds,
+      });
+      const confidence = assessComparisonConfidence({
+        docIds: normalizedDocIds,
+        perDocumentResults,
+        queryText: resolvedQuery,
+      });
+      const alignment = alignComparisonEvidence({
+        query: resolvedQuery,
+        documents: selectedDocuments,
+        perDocumentResults: confidence.usableResultsByDoc,
+      });
+      const analysis = analyzeComparison({
+        alignment,
+      });
+      const bundle = prepareComparisonSourceBundle({
+        alignment,
+      });
+      const traceFields = {
+        retrievalConfig: buildRetrievalConfigTrace(),
+        perDocumentResults: buildPerDocumentResultsTrace(
+          normalizedDocIds,
+          perDocumentResults
+        ),
+        confidence: buildConfidenceTrace(confidence),
+        alignmentSummary: buildAlignmentSummaryTrace(alignment),
+        comparisonAnalysisSummary: buildComparisonAnalysisSummaryTrace(analysis),
+        finalSourceBundle: buildBundleTrace(bundle),
+      };
+
+      if (!confidence.confident) {
+        return recordResponseTrace({
+          traceFields,
+          response: {
+            text: confidence.reason,
+            citations: bundle.citations,
+            retrievedContexts: bundle.retrievedContexts,
+            abstained: true,
+            abstainReason: confidence.reason,
+          },
+        });
+      }
+
+      return recordResponseTrace({
+        traceFields,
+        response: {
+          ...(await writeComparisonAnswer({
+            query,
+            resolvedQuery,
+            bundle,
+            analysis,
+            preferenceBlock: longMemoryContext.answerBlock,
+          })),
+          retrievedContexts: bundle.retrievedContexts,
+        },
+      });
     }
 
-    return result;
-  };
-  const route = routeQuery({
-    query: resolvedQuery,
-    docIds: normalizedDocIds,
-  });
-  const queryVector = await embedQuery(resolvedQuery);
-
-  if (route.mode === "compare") {
-    const perDocumentResults = await retrievePerDocumentContext({
+    const retrievalResults = await retrieveGlobalContext({
       queryVector,
       queryText: resolvedQuery,
       docIds: normalizedDocIds,
     });
-    const confidence = assessComparisonConfidence({
-      docIds: normalizedDocIds,
-      perDocumentResults,
+    const confidence = assessQaConfidence({
+      results: retrievalResults,
       queryText: resolvedQuery,
     });
-    const alignment = alignComparisonEvidence({
-      query: resolvedQuery,
-      documents: selectedDocuments,
-      perDocumentResults: confidence.usableResultsByDoc,
+    const bundle = prepareQASourceBundle({
+      results: confidence.usableResults,
     });
-    const analysis = analyzeComparison({
-      alignment,
-    });
-    const bundle = prepareComparisonSourceBundle({
-      alignment,
-    });
+    const traceFields = {
+      retrievalConfig: buildRetrievalConfigTrace(),
+      retrievalResults: retrievalResults.map((result) => buildResultTrace(result)),
+      confidence: buildConfidenceTrace(confidence),
+      finalSourceBundle: buildBundleTrace(bundle),
+    };
 
     if (!confidence.confident) {
-      return buildResponse({
-        text: confidence.reason,
-        citations: bundle.citations,
-        retrievedContexts: bundle.retrievedContexts,
-        abstained: true,
-        abstainReason: confidence.reason,
+      const gapPlan = await buildQaGapPlan({
+        query: resolvedQuery,
+        results: retrievalResults,
+        confidence,
+        docIds: normalizedDocIds,
+      });
+
+      return recordResponseTrace({
+        traceFields,
+        response: {
+          text: gapPlan.userMessage,
+          citations: bundle.citations,
+          retrievedContexts: bundle.retrievedContexts,
+          abstained: true,
+          abstainReason: gapPlan.userMessage,
+          gapPlan: {
+            missingAspects: gapPlan.missingAspects,
+            supplementalSearches: gapPlan.supplementalSearches,
+          },
+        },
       });
     }
 
-    return buildResponse({
-      ...(await writeComparisonAnswer({
-        query,
-        resolvedQuery,
-        bundle,
-        analysis,
-        preferenceBlock: longMemoryContext.answerBlock,
-      })),
-      retrievedContexts: bundle.retrievedContexts,
-    });
-  }
-
-  const retrievalResults = await retrieveGlobalContext({
-    queryVector,
-    queryText: resolvedQuery,
-    docIds: normalizedDocIds,
-  });
-  const confidence = assessQaConfidence({
-    results: retrievalResults,
-    queryText: resolvedQuery,
-  });
-  const bundle = prepareQASourceBundle({
-    results: confidence.usableResults,
-  });
-
-  if (!confidence.confident) {
-    const gapPlan = await buildQaGapPlan({
-      query: resolvedQuery,
-      results: retrievalResults,
-      confidence,
-      docIds: normalizedDocIds,
-    });
-
-    return buildResponse({
-      text: gapPlan.userMessage,
-      citations: bundle.citations,
-      retrievedContexts: bundle.retrievedContexts,
-      abstained: true,
-      abstainReason: gapPlan.userMessage,
-      gapPlan: {
-        missingAspects: gapPlan.missingAspects,
-        supplementalSearches: gapPlan.supplementalSearches,
+    return recordResponseTrace({
+      traceFields,
+      response: {
+        ...(await writeQaAnswer({
+          query,
+          resolvedQuery,
+          bundle,
+          preferenceBlock: longMemoryContext.answerBlock,
+        })),
+        retrievedContexts: bundle.retrievedContexts,
       },
     });
+  } catch (error) {
+    await recordRagTrace(
+      buildBaseTraceEvent({
+        error: buildErrorTrace(error),
+      })
+    );
+    throw error;
   }
-
-  return buildResponse({
-    ...(await writeQaAnswer({
-      query,
-      resolvedQuery,
-      bundle,
-      preferenceBlock: longMemoryContext.answerBlock,
-    })),
-    retrievedContexts: bundle.retrievedContexts,
-  });
 };
 
 export default chat;

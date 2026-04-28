@@ -74,6 +74,12 @@ Rerank is disabled by default (`RAG_RERANK_ENABLED=false`). When enabled, it run
 
 QA uses one global rerank across the selected documents. Compare uses per-document rerank: each selected document expands, reranks, and truncates its own candidates independently so a strong document cannot push another document out through cross-document mixing. `RAG_RERANK_WEIGHT` controls the mixed score between the original retrieval / hybrid score and the heuristic `rerankScore`.
 
+### RAG Observability
+
+RAG observability is disabled by default (`RAG_OBSERVABILITY_ENABLED=false`). When enabled, each QA or compare chat request appends one structured JSONL event to `server/data/rag-observability/events.jsonl` by default. The trace captures retrieval scores, rerank score fields when present, confidence-gate decisions, compare evidence summaries, and the final source bundle.
+
+For privacy, `RAG_OBSERVABILITY_INCLUDE_CONTEXT=false` by default. In that mode traces store document metadata, scores, `excerptHash`, and an `excerptPreview` capped at 120 characters, but not full chunk `text` / `pageContent`. Set `RAG_OBSERVABILITY_INCLUDE_CONTEXT=true` only for local debugging when recording full retrieved chunk text is acceptable.
+
 ### Web Answer
 
 1. Call a local MCP server
@@ -145,6 +151,8 @@ RAG_HYBRID_ENABLED=false
 RAG_RERANK_ENABLED=false
 RAG_RERANK_CANDIDATE_MULTIPLIER=3
 RAG_RERANK_WEIGHT=0.6
+RAG_OBSERVABILITY_ENABLED=false
+RAG_OBSERVABILITY_INCLUDE_CONTEXT=false
 RAG_CHUNK_SIZE=900
 RAG_CHUNK_OVERLAP=180
 RAG_RETRIEVAL_TOP_K=6

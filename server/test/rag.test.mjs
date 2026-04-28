@@ -536,6 +536,16 @@ const ingestFixture = async ({ docId, fileName, pages }) =>
     })),
   });
 
+const getObservabilityEventsPath = () =>
+  path.join(path.dirname(getRagDataDirectory()), "rag-observability", "events.jsonl");
+
+const readObservabilityEvents = async () =>
+  (await readFile(getObservabilityEventsPath(), "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+
 const buildComparisonAnalysis = ({ query, entries }) => {
   const documents = entries.map((entry) => ({
     docId: entry.docId,
@@ -800,6 +810,276 @@ test("compare flow returns multi-document evidence", async () => {
   assert.equal(citedDocIds.size, 2);
   assert.ok(citedDocIds.has("benefits-2024"));
   assert.ok(citedDocIds.has("benefits-2025"));
+});
+
+test("observability disabled does not create events jsonl", async () => {
+  await ingestFixture({
+    docId: "benefits-observe-off",
+    fileName: "benefits-observe-off.pdf",
+    pages: [
+      "Annual leave policy: employees receive 10 paid annual leave days each year.",
+    ],
+  });
+
+  await withEnv(
+    {
+      RAG_OBSERVABILITY_ENABLED: "false",
+      RAG_OBSERVABILITY_INCLUDE_CONTEXT: undefined,
+    },
+    async () => {
+      const response = await chat(
+        ["benefits-observe-off"],
+        "What is the annual leave policy?"
+      );
+
+      assert.match(response.text, /Grounded answer/);
+    }
+  );
+
+  await assert.rejects(readFile(getObservabilityEventsPath(), "utf8"), {
+    code: "ENOENT",
+  });
+});
+
+test("observability enabled writes one qa jsonl event", async () => {
+  await ingestFixture({
+    docId: "benefits-observe-on",
+    fileName: "benefits-observe-on.pdf",
+    pages: [
+      "Annual leave policy: employees receive 10 paid annual leave days each year.",
+    ],
+  });
+
+  await withEnv(
+    {
+      RAG_OBSERVABILITY_ENABLED: "true",
+      RAG_OBSERVABILITY_INCLUDE_CONTEXT: undefined,
+    },
+    async () => {
+      const response = await chat(
+        ["benefits-observe-on"],
+        "What is the annual leave policy?"
+      );
+      const events = await readObservabilityEvents();
+
+      assert.match(response.text, /Grounded answer/);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].routeMode, "qa");
+      assert.equal(events[0].query, "What is the annual leave policy?");
+      assert.equal(events[0].resolvedQuery, "What is the annual leave policy?");
+      assert.deepEqual(events[0].docIds, ["benefits-observe-on"]);
+      assert.equal(events[0].retrievalConfig.hybridEnabled, false);
+      assert.equal(events[0].retrievalConfig.rerankEnabled, false);
+      assert.equal(events[0].retrievalConfig.retrievalTopK, 6);
+      assert.ok(events[0].traceId);
+      assert.ok(events[0].timestamp);
+      assert.ok(events[0].latencyMs >= 0);
+      assert.equal(events[0].abstained, false);
+      assert.equal(events[0].answerLength, response.text.length);
+      assert.ok(events[0].retrievalResults.length > 0);
+      assert.ok(events[0].finalSourceBundle.sources.length > 0);
+    }
+  );
+});
+
+test("observability default trace omits full pageContent and text", async () => {
+  const fullPolicyText = [
+    "Annual leave policy: employees receive 10 paid annual leave days each year.",
+    "This deliberately long evidence sentence includes approval windows, region notes, carryover rules, and manager review details so the trace preview must be shorter than the full chunk.",
+  ].join(" ");
+
+  await ingestFixture({
+    docId: "benefits-observe-private",
+    fileName: "benefits-observe-private.pdf",
+    pages: [fullPolicyText],
+  });
+
+  await withEnv(
+    {
+      RAG_OBSERVABILITY_ENABLED: "true",
+      RAG_OBSERVABILITY_INCLUDE_CONTEXT: undefined,
+    },
+    async () => {
+      await chat(
+        ["benefits-observe-private"],
+        "What is the annual leave policy?"
+      );
+      const [event] = await readObservabilityEvents();
+      const [resultTrace] = event.retrievalResults;
+      const serializedEvent = JSON.stringify(event);
+
+      assert.equal("pageContent" in resultTrace, false);
+      assert.equal("text" in resultTrace, false);
+      assert.equal(resultTrace.excerptPreview.length <= 120, true);
+      assert.ok(resultTrace.excerptHash);
+      assert.doesNotMatch(serializedEvent, new RegExp(fullPolicyText));
+    }
+  );
+});
+
+test("observability include context records full pageContent and text", async () => {
+  const fullPolicyText = [
+    "Annual leave policy: employees receive 10 paid annual leave days each year.",
+    "Full trace context is intentionally enabled for this test so the entire chunk can be inspected during local debugging.",
+  ].join(" ");
+
+  await ingestFixture({
+    docId: "benefits-observe-context",
+    fileName: "benefits-observe-context.pdf",
+    pages: [fullPolicyText],
+  });
+
+  await withEnv(
+    {
+      RAG_OBSERVABILITY_ENABLED: "true",
+      RAG_OBSERVABILITY_INCLUDE_CONTEXT: "true",
+    },
+    async () => {
+      await chat(
+        ["benefits-observe-context"],
+        "What is the annual leave policy?"
+      );
+      const [event] = await readObservabilityEvents();
+      const [resultTrace] = event.retrievalResults;
+
+      assert.equal(resultTrace.pageContent, fullPolicyText);
+      assert.equal(resultTrace.text, fullPolicyText);
+    }
+  );
+});
+
+test("compare observability groups per-document results by docId", async () => {
+  await ingestFixture({
+    docId: "benefits-observe-2024",
+    fileName: "benefits-observe-2024.pdf",
+    pages: [
+      "Remote work policy: employees may work remotely 2 days per week with manager approval.",
+    ],
+  });
+  await ingestFixture({
+    docId: "benefits-observe-2025",
+    fileName: "benefits-observe-2025.pdf",
+    pages: [
+      "Remote work policy: employees may work remotely 3 days per week with manager approval.",
+    ],
+  });
+
+  await withEnv(
+    {
+      RAG_OBSERVABILITY_ENABLED: "true",
+      RAG_OBSERVABILITY_INCLUDE_CONTEXT: undefined,
+    },
+    async () => {
+      await chat(
+        ["benefits-observe-2024", "benefits-observe-2025"],
+        "Compare the remote work policy."
+      );
+      const [event] = await readObservabilityEvents();
+
+      assert.equal(event.routeMode, "compare");
+      assert.deepEqual(Object.keys(event.perDocumentResults).sort(), [
+        "benefits-observe-2024",
+        "benefits-observe-2025",
+      ]);
+      assert.ok(event.perDocumentResults["benefits-observe-2024"].length > 0);
+      assert.ok(event.perDocumentResults["benefits-observe-2025"].length > 0);
+      assert.deepEqual(
+        event.alignmentSummary.perDocumentEvidenceCounts.map((entry) => entry.docId).sort(),
+        ["benefits-observe-2024", "benefits-observe-2025"]
+      );
+    }
+  );
+});
+
+test("rerank observability includes originalScore and rerankScore", async () => {
+  await withEnv(
+    {
+      RAG_OBSERVABILITY_ENABLED: "true",
+      RAG_OBSERVABILITY_INCLUDE_CONTEXT: undefined,
+      RAG_RETRIEVAL_TOP_K: "1",
+      RAG_RERANK_ENABLED: "true",
+      RAG_RERANK_CANDIDATE_MULTIPLIER: "2",
+      RAG_RERANK_WEIGHT: "0.7",
+    },
+    async () => {
+      configureOpenAIProvider({
+        ...provider,
+        embedTexts: async (texts) =>
+          texts.map((text) =>
+            /Annual leave policy/i.test(text)
+              ? buildVectorWithQuerySimilarity(0.8)
+              : buildVectorWithQuerySimilarity(1)
+          ),
+        embedQuery: async () => RERANK_QUERY_VECTOR,
+      });
+
+      try {
+        await ingestFixture({
+          docId: "benefits-observe-rerank",
+          fileName: "benefits-observe-rerank.pdf",
+          pages: [
+            "Cafeteria policy: lunch menus rotate every week.",
+            "Annual leave policy: employees receive 10 paid annual leave days each year.",
+          ],
+        });
+
+        await chat(
+          ["benefits-observe-rerank"],
+          "What is the annual leave policy?"
+        );
+        const [event] = await readObservabilityEvents();
+        const [resultTrace] = event.retrievalResults;
+
+        assert.equal(event.retrievalConfig.rerankEnabled, true);
+        assert.equal(typeof resultTrace.originalScore, "number");
+        assert.equal(typeof resultTrace.rerankScore, "number");
+      } finally {
+        configureOpenAIProvider(provider);
+      }
+    }
+  );
+});
+
+test("observability write failure does not affect chat response", async () => {
+  await ingestFixture({
+    docId: "benefits-observe-error",
+    fileName: "benefits-observe-error.pdf",
+    pages: [
+      "Annual leave policy: employees receive 10 paid annual leave days each year.",
+    ],
+  });
+
+  await withEnv(
+    {
+      RAG_OBSERVABILITY_ENABLED: "true",
+      RAG_OBSERVABILITY_INCLUDE_CONTEXT: undefined,
+    },
+    async () => {
+      const blockingFilePath = path.join(tempRoot, "not-a-directory");
+      const originalDirectory = getRagDataDirectory();
+      const originalConsoleError = console.error;
+      const consoleErrors = [];
+
+      await writeFile(blockingFilePath, "blocks observability directory creation", "utf8");
+      configureRagDataDirectory(path.join(blockingFilePath, "rag"));
+      console.error = (...args) => {
+        consoleErrors.push(args);
+      };
+
+      try {
+        const response = await chat(
+          ["benefits-observe-error"],
+          "What is the annual leave policy?"
+        );
+
+        assert.match(response.text, /Grounded answer/);
+        assert.ok(consoleErrors.length > 0);
+      } finally {
+        console.error = originalConsoleError;
+        configureRagDataDirectory(originalDirectory);
+      }
+    }
+  );
 });
 
 test("near-duplicate compare flow short-circuits to no material difference", async () => {

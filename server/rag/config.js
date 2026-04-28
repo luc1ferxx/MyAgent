@@ -143,6 +143,12 @@ export const isNearDuplicateGuardEnabled = () =>
 export const isLongMemoryEnabled = () =>
   toBoolean(process.env.RAG_LONG_MEMORY_ENABLED, false);
 
+export const isRagObservabilityEnabled = () =>
+  toBoolean(process.env.RAG_OBSERVABILITY_ENABLED, false);
+
+export const shouldIncludeRagObservabilityContext = () =>
+  toBoolean(process.env.RAG_OBSERVABILITY_INCLUDE_CONTEXT, false);
+
 export const getPostgresDatabaseUrl = () =>
   process.env.POSTGRES_DATABASE_URL || process.env.LONG_MEMORY_DATABASE_URL || "";
 
