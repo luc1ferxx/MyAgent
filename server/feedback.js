@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveDataDirectory } from "./runtime-paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,8 +16,12 @@ const ALLOWED_FEEDBACK_TYPES = new Set([
   "hallucination",
 ]);
 
-let feedbackDirectory =
-  process.env.FEEDBACK_DIRECTORY?.trim() || DEFAULT_FEEDBACK_DIRECTORY;
+let feedbackDirectory = resolveDataDirectory({
+  explicitPath: process.env.FEEDBACK_DIRECTORY,
+  derivedPath: DEFAULT_FEEDBACK_DIRECTORY,
+  fallbackSegments: ["feedback"],
+  sourceDirectory: __dirname,
+});
 
 const normalizeString = (value) => String(value ?? "").trim();
 

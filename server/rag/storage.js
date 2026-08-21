@@ -3,13 +3,17 @@ import { mkdir, writeFile, rename, unlink } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { randomBytes } from "crypto";
+import { resolveDataDirectory } from "../runtime-paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let ragDataDirectory =
-  process.env.RAG_DATA_DIRECTORY?.trim() ||
-  path.join(__dirname, "..", "data", "rag");
+let ragDataDirectory = resolveDataDirectory({
+  explicitPath: process.env.RAG_DATA_DIRECTORY,
+  derivedPath: path.join(__dirname, "..", "data", "rag"),
+  fallbackSegments: ["rag"],
+  sourceDirectory: __dirname,
+});
 
 export const configureRagDataDirectory = (nextDirectory) => {
   ragDataDirectory = path.resolve(nextDirectory);

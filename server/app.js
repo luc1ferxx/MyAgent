@@ -21,10 +21,18 @@ import { createQualityRouter } from "./routes/quality.js";
 import { createSystemRouter } from "./routes/system.js";
 import { createTasksRouter } from "./routes/tasks.js";
 import { createUploadsRouter } from "./routes/uploads.js";
+import { resolveDataDirectory } from "./runtime-paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const defaultUploadsDirectory = path.join(__dirname, "uploads");
+// Reads UPLOADS_DIRECTORY as well, so a bundled build can be pointed at a real
+// directory without threading an option through every caller of createApp.
+const defaultUploadsDirectory = resolveDataDirectory({
+  explicitPath: process.env.UPLOADS_DIRECTORY,
+  derivedPath: path.join(__dirname, "uploads"),
+  fallbackSegments: ["uploads"],
+  sourceDirectory: __dirname,
+});
 
 const parseAllowedOrigins = () =>
   String(process.env.ALLOWED_ORIGINS ?? "")

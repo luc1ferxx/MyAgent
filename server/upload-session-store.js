@@ -20,13 +20,17 @@ import {
   MAX_UPLOAD_CHUNKS,
   isSafeUploadFileName,
 } from "./upload-policy.js";
+import { resolveDataDirectory } from "./runtime-paths.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let uploadSessionsDirectory =
-  process.env.UPLOAD_SESSION_DIRECTORY?.trim() ||
-  path.join(__dirname, "upload-sessions");
+let uploadSessionsDirectory = resolveDataDirectory({
+  explicitPath: process.env.UPLOAD_SESSION_DIRECTORY,
+  derivedPath: path.join(__dirname, "upload-sessions"),
+  fallbackSegments: ["upload-sessions"],
+  sourceDirectory: __dirname,
+});
 
 const MANIFEST_VERSION = 2;
 const UPLOAD_STORE_INSTANCE_ID = randomUUID();
