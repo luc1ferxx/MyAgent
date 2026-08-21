@@ -52,11 +52,29 @@ const magnitude = (vector) =>
   Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
 
 const cosineSimilarity = (left, right) => {
-  if (!Array.isArray(left) || !Array.isArray(right) || left.length === 0 || right.length === 0) {
+  // Length mismatch returns 0 rather than a partial score. Comparing the first N
+  // components of two different embedding spaces is meaningless, but it is not
+  // harmlessly meaningless: the old code took the dot product over
+  // Math.min(length) and divided by both FULL magnitudes, which yields a deflated
+  // but substantial number -- two all-ones vectors of 1536 and 3072 dimensions
+  // score 0.7071, well above the 0.32 default in getMinRelevanceScore(). So a
+  // stale document did not merely rank badly, it qualified as evidence and got
+  // cited. Silent, and worse than returning nothing.
+  //
+  // Reachable whenever OPENAI_EMBEDDING_MODEL or OPENAI_BASE_URL changes, which
+  // for a product that supports any OpenAI-compatible endpoint is a normal user
+  // action rather than an error.
+  if (
+    !Array.isArray(left) ||
+    !Array.isArray(right) ||
+    left.length === 0 ||
+    right.length === 0 ||
+    left.length !== right.length
+  ) {
     return 0;
   }
 
-  const sharedLength = Math.min(left.length, right.length);
+  const sharedLength = left.length;
   let dotProduct = 0;
 
   for (let index = 0; index < sharedLength; index += 1) {
@@ -67,6 +85,52 @@ const cosineSimilarity = (left, right) => {
 
   return denominator > 0 ? dotProduct / denominator : 0;
 };
+
+// Scoring 0 is correct but silent, and a user whose archive suddenly stopped
+// matching anything needs to know why. Deduplicated by shape so a mismatched
+// archive does not print once per query.
+const reportedDimensionMismatches = new Set();
+
+export const resetDimensionMismatchReports = () => {
+  reportedDimensionMismatches.clear();
+};
+
+const reportDimensionMismatch = ({ queryLength, entries }) => {
+  const storedLengths = new Set();
+  let skippedCount = 0;
+
+  for (const entry of entries) {
+    const length = Array.isArray(entry.vector) ? entry.vector.length : 0;
+    if (length !== queryLength) {
+      storedLengths.add(length);
+      skippedCount += 1;
+    }
+  }
+
+  if (skippedCount === 0) {
+    return null;
+  }
+
+  const signature = `${queryLength}:${[...storedLengths].sort((a, b) => a - b).join(",")}`;
+
+  if (reportedDimensionMismatches.has(signature)) {
+    return null;
+  }
+
+  reportedDimensionMismatches.add(signature);
+
+  const message =
+    `Dense retrieval skipped ${skippedCount} of ${entries.length} stored chunks: the query ` +
+    `embedding is ${queryLength}-dimensional but stored chunks are ` +
+    `${[...storedLengths].sort((a, b) => a - b).join("/")}-dimensional. This happens after ` +
+    `OPENAI_EMBEDDING_MODEL or OPENAI_BASE_URL changes. Those documents cannot be ranked by ` +
+    `meaning until they are re-ingested under the current embedding model; keyword matching ` +
+    `still applies. Re-ingest them to restore dense ranking.`;
+
+  console.warn(message);
+  return message;
+};
+
 
 const buildKeywordScore = (queryTerms, entry) => {
   if (queryTerms.size === 0) {
@@ -188,9 +252,13 @@ export const searchLocalDocuments = async ({
 }) => {
   const docIdSet = new Set(docIds);
   const queryTerms = buildTermSet(queryText);
+  const candidates = vectorEntries.filter((entry) => docIdSet.has(entry.metadata.docId));
 
-  return vectorEntries
-    .filter((entry) => docIdSet.has(entry.metadata.docId))
+  if (Array.isArray(queryVector) && queryVector.length > 0) {
+    reportDimensionMismatch({ queryLength: queryVector.length, entries: candidates });
+  }
+
+  return candidates
     .map((entry) => {
       const vectorScore = cosineSimilarity(queryVector, entry.vector);
       const keywordScore = buildKeywordScore(queryTerms, entry);
