@@ -10,6 +10,7 @@ import chat, {
   listDocuments,
 } from "../chat.js";
 import { runAgentRag } from "../rag/agent.js";
+import { formatAskResult, toMcpTextContent } from "../archive-mcp-tools.js";
 import { buildPublicFilePath } from "../rag/document-utils.js";
 import { configureOpenAIProvider, resetOpenAIProvider } from "../rag/openai.js";
 import { configureRagDataDirectory, getRagDataDirectory } from "../rag/storage.js";
@@ -1166,8 +1167,86 @@ test("compare flow returns multi-document evidence", async () => {
   assert.ok(citedDocIds.has("benefits-2025"));
 });
 
-test("intent classifier routes comparative questions without explicit compare keywords", () => {
-  const route = routeQuery({
+test("the MCP ask tool carries a real comparison summary onto the wire", async () => {
+  // Exercises the exact composition in archive-mcp-server.js -- chat() ->
+  // formatAskResult() -> toMcpTextContent() -- because that seam had no test and
+  // the formatter's own unit test hand-builds { materialDifference: true }, a shape
+  // the engine never produces. So the field name could drift on either side and
+  // every test would still pass. It is a real defect class, not a hypothetical:
+  // reading response.comparison instead of response.comparisonAnalysisSummary
+  // silently reports "no comparison" during manual verification.
+  await ingestFixture({
+    docId: "vendor-a",
+    fileName: "vendor-a.pdf",
+    pages: [
+      "Section 7. Limitation of Liability. The total liability of Vendor A shall not exceed the fees paid in the twelve (12) months preceding the claim.",
+    ],
+  });
+  await ingestFixture({
+    docId: "vendor-b",
+    fileName: "vendor-b.pdf",
+    pages: [
+      "Section 7. Limitation of Liability. The total liability of Vendor B shall not exceed the fees paid in the six (6) months preceding the claim.",
+    ],
+  });
+
+  const response = await chat(
+    ["vendor-a", "vendor-b"],
+    "Compare the limitation of liability in these two contracts."
+  );
+
+  const envelope = toMcpTextContent(formatAskResult(response));
+
+  // The MCP wire is JSON text, so anything not serializable would vanish
+  // silently. Parsing it back is the only assertion that proves what a caller
+  // actually receives.
+  const payload = JSON.parse(envelope.content[0].text);
+
+  assert.ok(payload.comparison, "the wire payload must carry a comparison summary");
+  assert.deepEqual(payload.comparison.comparedDocIds.slice().sort(), [
+    "vendor-a",
+    "vendor-b",
+  ]);
+  assert.equal(payload.comparison.evidenceBalance, "balanced");
+  // These documents genuinely differ, so the no-material-difference short circuit
+  // must not claim otherwise.
+  assert.equal(payload.comparison.shouldShortCircuitNoMaterialDifference, false);
+
+  // The clauses are near-identical apart from the number, which is the case the
+  // engine is built for: it should classify the pair as a near duplicate and then
+  // find the numeric conflict inside it rather than reporting "no differences".
+  // This also proves the nested pair objects survive JSON serialization onto the
+  // wire -- the part a formatter unit test with a hand-made summary cannot check.
+  assert.equal(payload.comparison.explicitConflictPairs.length, 1);
+
+  const [conflict] = payload.comparison.explicitConflictPairs;
+  assert.equal(conflict.explicitConflict, true);
+  assert.deepEqual(
+    [conflict.leftDocId, conflict.rightDocId].sort(),
+    ["vendor-a", "vendor-b"]
+  );
+
+  const leftNumbers = conflict.numericTokensOnlyInLeft.join(" ");
+  const rightNumbers = conflict.numericTokensOnlyInRight.join(" ");
+  assert.match(leftNumbers, /12|twelve/);
+  assert.match(rightNumbers, /6|six/);
+  // The differing values must be reported on their own sides. Leaking a value into
+  // the wrong side is the specific failure that makes a comparison worse than no
+  // answer, because it reads as confident and is wrong.
+  assert.doesNotMatch(leftNumbers, /\bsix\b/);
+  assert.doesNotMatch(rightNumbers, /\btwelve\b/);
+
+  // Both sides must reach the caller with page-accurate citations, which is the
+  // whole point of a comparison answer.
+  assert.equal(payload.abstained, false);
+  assert.deepEqual(
+    [...new Set(payload.citations.map((citation) => citation.fileName))].sort(),
+    ["vendor-a.pdf", "vendor-b.pdf"]
+  );
+  assert.ok(payload.citations.every((citation) => citation.pageNumber === 1));
+});
+
+test("intent classifier routes comparative questions without explicit compare keywords", () => {  const route = routeQuery({
     query: "Which policy allows more remote days?",
     docIds: ["benefits-2024", "benefits-2025"],
   });
