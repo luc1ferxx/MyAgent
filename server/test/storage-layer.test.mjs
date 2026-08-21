@@ -1,11 +1,12 @@
 import test, { afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
   configureRagDataDirectory,
   getRagDataDirectory,
+  getRagDataPath,
   readJsonFileSync,
   writeJsonFileSync,
   writeJsonFileAsync,
@@ -317,6 +318,63 @@ test("removeDocumentsFromSparseIndex removes by docId", async () => {
   });
 
   assert.ok(results.every((r) => r.document.metadata.docId === "s2"));
+});
+
+test("removing docIds that are not indexed does not rewrite either index file", async () => {
+  // ingest rolls back unconditionally, so the common case is a rollback for a
+  // document that never reached the index. Rewriting both whole index files on
+  // every such failure would scale the cost of a failed upload with the size of
+  // the entire archive.
+  await addDocumentsToLocalIndex({
+    documents: [
+      {
+        id: "keep:0",
+        pageContent: "Retained vector content.",
+        metadata: { docId: "keep", fileName: "keep.pdf" },
+      },
+    ],
+  });
+  await addDocumentsToSparseIndex({
+    documents: [
+      {
+        id: "keep:0",
+        pageContent: "Retained sparse content.",
+        metadata: { docId: "keep", fileName: "keep.pdf" },
+      },
+    ],
+  });
+
+  const vectorIndexPath = getRagDataPath("vector-index.json");
+  const sparseIndexPath = getRagDataPath("sparse-index.json");
+  const exists = async (filePath) =>
+    access(filePath).then(
+      () => true,
+      () => false
+    );
+
+  assert.equal(await exists(vectorIndexPath), true);
+  assert.equal(await exists(sparseIndexPath), true);
+
+  // Deleting the files makes a stray write impossible to miss: only a persist
+  // call can bring them back.
+  await rm(vectorIndexPath);
+  await rm(sparseIndexPath);
+
+  await removeDocumentsFromLocalIndex({ docIds: ["never-indexed"] });
+  await removeDocumentsFromSparseIndex({ docIds: ["never-indexed"] });
+
+  assert.equal(await exists(vectorIndexPath), false);
+  assert.equal(await exists(sparseIndexPath), false);
+
+  // The in-memory index must be untouched too -- skipping the write is only
+  // correct if nothing was actually removed.
+  const vectorResults = await searchLocalDocuments({
+    queryText: "retained vector content",
+    docIds: ["keep"],
+    topK: 5,
+  });
+  assert.equal(vectorResults[0]?.document.metadata.docId, "keep");
+  assert.equal(getSparseStatisticsSnapshot().entryCount, 1);
 });
 
 test("clearSparseIndex empties the store", async () => {

@@ -230,6 +230,14 @@ export const removeDocumentsFromSparseIndex = async ({ docIds }) => {
   await withWriteLock(async () => {
     const docIdSet = new Set(docIds);
     const removedEntries = sparseEntries.filter((entry) => docIdSet.has(entry.metadata.docId));
+
+    // Same guard as vector-store-local.js, for the same reason: unconditional
+    // rollback in ingest means most calls here have nothing to remove, and this
+    // file is rewritten whole.
+    if (removedEntries.length === 0) {
+      return;
+    }
+
     for (const entry of removedEntries) {
       subtractEntryStats(entry);
     }

@@ -157,7 +157,17 @@ export const removeDocumentsFromLocalIndex = async ({ docIds }) => {
 
   await withWriteLock(async () => {
     const docIdSet = new Set(docIds);
-    vectorEntries = vectorEntries.filter((entry) => !docIdSet.has(entry.metadata.docId));
+    const remaining = vectorEntries.filter((entry) => !docIdSet.has(entry.metadata.docId));
+
+    // Nothing matched, so there is nothing to write. Worth guarding because
+    // ingest now rolls back unconditionally (rag/index.js): a failure that never
+    // reached the index would otherwise rewrite this entire file, and it grows
+    // with the archive.
+    if (remaining.length === vectorEntries.length) {
+      return;
+    }
+
+    vectorEntries = remaining;
     await persistVectorEntriesAsync();
   });
 };
