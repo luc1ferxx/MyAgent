@@ -1,4 +1,9 @@
 import { readFile } from "node:fs/promises";
+// Must stay above the pdfjs import: it installs globals that pdfjs reads while
+// evaluating its own module body, and sibling static imports run in source order.
+// Moving or sorting this line breaks single-file executable builds. See the file
+// itself for why pdfjs needs the help.
+import "./pdf-runtime-shim.js";
 import {
   getDocument,
   version as pdfJsVersion,
