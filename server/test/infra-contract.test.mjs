@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, rm } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,10 @@ import {
   buildHealthReport,
   runStartupHealthChecks,
 } from "../health.js";
+import {
+  configureRagDataDirectory,
+  getRagDataDirectory,
+} from "../rag/storage.js";
 import {
   buildFeedbackRecord,
   configureFeedbackDirectory,
@@ -192,6 +196,75 @@ test("health report contracts expose missing dependencies and strict startup fai
       );
     }
   );
+});
+
+test("health report describes file-backed and in-process stores instead of probing PostgreSQL", async () => {
+  // The zero-infrastructure profile injects a file-backed document registry and an
+  // in-process session memory store. Probing PostgreSQL for those anyway reported
+  // two errors for subsystems that were working, and under
+  // STARTUP_HEALTH_STRICT=true that refused to boot a correctly configured server.
+  const originalDataDirectory = getRagDataDirectory();
+  const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "health-filesystem-"));
+
+  try {
+    const writableDirectory = path.join(temporaryRoot, "rag-data");
+    configureRagDataDirectory(writableDirectory);
+
+    await withEnv(
+      {
+        DOCUMENT_STORE_PROVIDER: "filesystem",
+        SESSION_MEMORY_STORE_PROVIDER: "memory",
+        POSTGRES_DATABASE_URL: undefined,
+        LONG_MEMORY_DATABASE_URL: undefined,
+      },
+      async () => {
+        const report = await buildHealthReport();
+
+        assert.equal(report.checks.documentStore.status, "ok");
+        assert.equal(report.checks.documentStore.backend, "filesystem");
+        assert.equal(report.checks.documentStore.provider, "filesystem");
+        assert.equal(report.checks.documentStore.directory, writableDirectory);
+        assert.equal(report.checks.sessionMemory.status, "ok");
+        assert.equal(report.checks.sessionMemory.backend, "memory");
+        // No PostgreSQL table should be named for a backend that is not PostgreSQL.
+        assert.equal("table" in report.checks.documentStore, false);
+        assert.equal("table" in report.checks.sessionMemory, false);
+      }
+    );
+
+    // A file backend has exactly one interesting failure mode, and reporting "ok"
+    // without checking would make the health surface useless for the setup that
+    // has no database logs to fall back on.
+    const unwritableParent = path.join(temporaryRoot, "locked");
+    await mkdir(unwritableParent);
+    await chmod(unwritableParent, 0o500);
+    configureRagDataDirectory(path.join(unwritableParent, "rag-data"));
+
+    try {
+      await withEnv(
+        {
+          DOCUMENT_STORE_PROVIDER: "filesystem",
+          POSTGRES_DATABASE_URL: undefined,
+          LONG_MEMORY_DATABASE_URL: undefined,
+        },
+        async () => {
+          const report = await buildHealthReport();
+
+          assert.equal(report.checks.documentStore.status, "error");
+          assert.equal(report.checks.documentStore.backend, "filesystem");
+          assert.match(report.checks.documentStore.message, /not writable/);
+        }
+      );
+    } finally {
+      await chmod(unwritableParent, 0o700);
+    }
+  } finally {
+    configureRagDataDirectory(originalDataDirectory);
+    await rm(temporaryRoot, {
+      force: true,
+      recursive: true,
+    });
+  }
 });
 
 test("health report contracts cover auth, qdrant, and scoped store failures", async () => {

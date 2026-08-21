@@ -322,8 +322,27 @@ export const isLongMemoryPostgresSslEnabled = () =>
 export const getDocumentsPostgresTable = () =>
   (process.env.DOCUMENTS_POSTGRES_TABLE || "rag_documents").trim();
 
+// Deliberately no "auto" and defaulting to postgres, unlike the task/agent-run
+// providers. The document registry store is *injected*
+// (configureDocumentRegistryStore), not selected by config, so there is nothing
+// to auto-detect -- and a health check that guessed "filesystem" from the absence
+// of a database URL would report a backend that nothing had actually installed.
+// Only server/standalone-profile.js sets this, and it sets it alongside injecting
+// the matching store, so the two cannot disagree.
+export const getDocumentStoreProvider = () =>
+  toChoice(process.env.DOCUMENT_STORE_PROVIDER, "postgres", [
+    "filesystem",
+    "postgres",
+  ]);
+
 export const getSessionMemoryPostgresTable = () =>
   (process.env.SESSION_MEMORY_POSTGRES_TABLE || "rag_session_memory").trim();
+
+export const getSessionMemoryStoreProvider = () =>
+  toChoice(process.env.SESSION_MEMORY_STORE_PROVIDER, "postgres", [
+    "memory",
+    "postgres",
+  ]);
 
 export const getTaskStoreProvider = () =>
   toChoice(process.env.TASK_STORE_PROVIDER, "auto", [

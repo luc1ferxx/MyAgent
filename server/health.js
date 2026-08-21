@@ -1,3 +1,6 @@
+import { constants as fsConstants } from "fs";
+import { access, mkdir } from "fs/promises";
+
 import {
   getAdminAuditEventsPostgresTable,
   getAdminAuditRetentionDays,
@@ -10,12 +13,14 @@ import {
   getAgentExperienceMemoryConfigStatus,
   getChatModel,
   getDocumentsPostgresTable,
+  getDocumentStoreProvider,
   getEmbeddingModel,
   getLongMemoryConfigStatus,
   getLongMemoryPostgresTable,
   getQdrantCollection,
   getQdrantUrl,
   getSessionMemoryPostgresTable,
+  getSessionMemoryStoreProvider,
   getTaskEventsPostgresTable,
   getTaskStoreProvider,
   getTasksPostgresTable,
@@ -31,6 +36,7 @@ import {
   isPostgresConfigured,
 } from "./rag/postgres.js";
 import { getOpenAIApiKey } from "./rag/openai.js";
+import { getRagDataDirectory } from "./rag/storage.js";
 
 const buildEntry = (status, details = {}) => ({
   status,
@@ -38,6 +44,38 @@ const buildEntry = (status, details = {}) => ({
 });
 
 const isErrorStatus = (status) => status === "error";
+
+// A filesystem backend can fail in exactly one interesting way: the directory is
+// not writable. Reporting "ok" without checking would make the health surface
+// useless for the zero-infrastructure setup, which is the one where the operator
+// has no database logs to fall back on.
+const checkRagDataDirectoryHealth = async ({ message, provider }) => {
+  const directory = getRagDataDirectory();
+
+  try {
+    await mkdir(directory, {
+      recursive: true,
+    });
+    await access(directory, fsConstants.W_OK);
+
+    return buildEntry("ok", {
+      backend: "filesystem",
+      provider,
+      directory,
+      message,
+    });
+  } catch (error) {
+    return buildEntry("error", {
+      backend: "filesystem",
+      provider,
+      directory,
+      message:
+        error instanceof Error
+          ? `${directory} is not writable: ${error.message}`
+          : `${directory} is not writable.`,
+    });
+  }
+};
 
 const checkOpenAIHealth = async () => {
   try {
@@ -194,11 +232,21 @@ const checkAgentExperienceMemoryHealth = async () => {
 };
 
 const checkDocumentStoreHealth = async () => {
+  const provider = getDocumentStoreProvider();
+
+  if (provider === "filesystem") {
+    return checkRagDataDirectoryHealth({
+      message: "Document registry is using file storage.",
+      provider,
+    });
+  }
+
   const postgres = await checkPostgresHealth();
 
   if (isErrorStatus(postgres.status)) {
     return buildEntry("error", {
       backend: "postgresql",
+      provider,
       table: getDocumentsPostgresTable(),
       message: postgres.message,
     });
@@ -209,6 +257,7 @@ const checkDocumentStoreHealth = async () => {
 
     return buildEntry("ok", {
       backend: "postgresql",
+      provider,
       table: getDocumentsPostgresTable(),
       appliedMigrations: migrations.appliedMigrations,
       message: "PostgreSQL document storage is reachable and migrations are applied.",
@@ -216,6 +265,7 @@ const checkDocumentStoreHealth = async () => {
   } catch (error) {
     return buildEntry("error", {
       backend: "postgresql",
+      provider,
       table: getDocumentsPostgresTable(),
       message:
         error instanceof Error ? error.message : "Document storage migration failed.",
@@ -224,11 +274,22 @@ const checkDocumentStoreHealth = async () => {
 };
 
 const checkSessionMemoryHealth = async () => {
+  const provider = getSessionMemoryStoreProvider();
+
+  if (provider === "memory") {
+    return buildEntry("ok", {
+      backend: "memory",
+      provider,
+      message: "Session memory is in-process and resets when the server restarts.",
+    });
+  }
+
   const postgres = await checkPostgresHealth();
 
   if (isErrorStatus(postgres.status)) {
     return buildEntry("error", {
       backend: "postgresql",
+      provider,
       table: getSessionMemoryPostgresTable(),
       message: postgres.message,
     });
@@ -239,6 +300,7 @@ const checkSessionMemoryHealth = async () => {
 
     return buildEntry("ok", {
       backend: "postgresql",
+      provider,
       table: getSessionMemoryPostgresTable(),
       appliedMigrations: migrations.appliedMigrations,
       message: "PostgreSQL session memory storage is reachable and migrations are applied.",
@@ -246,6 +308,7 @@ const checkSessionMemoryHealth = async () => {
   } catch (error) {
     return buildEntry("error", {
       backend: "postgresql",
+      provider,
       table: getSessionMemoryPostgresTable(),
       message:
         error instanceof Error ? error.message : "Session memory migration failed.",

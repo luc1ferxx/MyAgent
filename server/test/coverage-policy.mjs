@@ -129,6 +129,7 @@ export const GLOBAL_GATE = {
 // Keeping the list explicit makes every newly added backend source opt in to
 // coverage by default instead of silently disappearing when no test imports it.
 export const GLOBAL_COVERAGE_EXCLUDED_PATHS = Object.freeze([
+  "server/archive-ingest.mjs",
   "server/archive-mcp-server.js",
   "server/evaluation/benchmark-rerank-latency.mjs",
   "server/evaluation/build-arxiv-corpus.mjs",

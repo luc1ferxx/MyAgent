@@ -36,13 +36,16 @@ const normalizeAccessScope = (accessScope = {}) => ({
   workspaceId: String(accessScope.workspaceId ?? "").trim(),
 });
 
-const hasAccessScope = (accessScope = {}) => {
+export const hasAccessScope = (accessScope = {}) => {
   const scope = normalizeAccessScope(accessScope);
 
   return Boolean(scope.userId || scope.workspaceId);
 };
 
-const documentMatchesAccessScope = (document = {}, accessScope = {}) => {
+// Exported so alternative registry stores (doc-registry-file.js) enforce the
+// same access rule rather than reimplementing it. An access-control predicate
+// that exists twice is an access-control predicate that will eventually differ.
+export const documentMatchesAccessScope = (document = {}, accessScope = {}) => {
   const safeDocument = document ?? {};
   const scope = normalizeAccessScope(accessScope);
 
@@ -160,7 +163,11 @@ const toStoredDocument = (document = {}) => {
     ).trim(),
     profile,
     uploadedAt: document.uploadedAt ?? new Date().toISOString(),
-    storageBackend: "postgresql",
+    // Defaults to postgresql because that is where documents live unless a store
+    // says otherwise. Preserving what the store reports matters: every document
+    // entering the registry is renormalized through here, so hardcoding this made
+    // the file-backed store's documents claim a database that is not running.
+    storageBackend: String(document.storageBackend ?? "").trim() || "postgresql",
   };
 };
 
@@ -199,7 +206,7 @@ const toPublicDocument = (document) =>
       }
     : null;
 
-const resolveFileBuffer = async ({
+export const resolveFileBuffer = async ({
   fileBuffer = null,
   readFile = readBinaryFile,
   sourceFilePath = "",

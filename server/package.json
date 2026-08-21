@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "archive:ingest": "node archive-ingest.mjs",
     "eval:synthetic": "node evaluation/run-synthetic-eval.mjs",
     "eval:real": "node evaluation/run-real-eval.mjs",
     "eval:robust-suite": "node evaluation/run-eval-suite.mjs --suite robust",
