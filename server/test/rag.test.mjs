@@ -20,6 +20,10 @@ import {
 } from "../rag/doc-registry.js";
 import { resetVectorStore } from "../rag/vector-store.js";
 import {
+  getSparseStatisticsSnapshot,
+  searchSparseDocuments,
+} from "../rag/sparse-store.js";
+import {
   configureQdrantClientFactory,
   resetQdrantClientFactory,
 } from "../rag/vector-store-qdrant.js";
@@ -928,6 +932,60 @@ test("ingest rolls back vector entries when document registration fails", async 
   });
 
   assert.equal(results.length, 0);
+});
+
+test("ingest rolls back the sparse index when the dense index write fails", async () => {
+  // The dense and sparse indexes are written concurrently, so a failing embedding
+  // call -- the shape of every "OPENAI_API_KEY is not configured" ingest -- leaves
+  // the sparse write already committed. Those orphans are not inert: the sparse
+  // store keeps corpus-wide BM25 statistics, so entries for a document that was
+  // never registered skew scoring for every document that was.
+  const statisticsBefore = getSparseStatisticsSnapshot();
+
+  configureOpenAIProvider({
+    ...provider,
+    embedTexts: async () => {
+      throw new Error("OPENAI_API_KEY is not configured.");
+    },
+  });
+
+  try {
+    await assert.rejects(
+      ingestFixture({
+        docId: "sparse-orphan-doc",
+        fileName: "sparse-orphan.pdf",
+        pages: [
+          "Orphan sentinel clause: the reimbursement ceiling is 4321 credits.",
+        ],
+      }),
+      /OPENAI_API_KEY is not configured/
+    );
+  } finally {
+    configureOpenAIProvider(provider);
+  }
+
+  assert.equal(getDocument("sparse-orphan-doc"), null);
+
+  const sparseMatches = await searchSparseDocuments({
+    queryText: "Orphan sentinel clause reimbursement ceiling",
+    topK: 10,
+  });
+
+  assert.deepEqual(
+    sparseMatches.filter(
+      (match) => match.metadata?.docId === "sparse-orphan-doc"
+    ),
+    []
+  );
+
+  const statisticsAfter = getSparseStatisticsSnapshot();
+
+  assert.equal(statisticsAfter.entryCount, statisticsBefore.entryCount);
+  assert.equal(statisticsAfter.totalDocumentLength, statisticsBefore.totalDocumentLength);
+  assert.equal(
+    statisticsAfter.documentFrequencyByTerm.get("orphan"),
+    statisticsBefore.documentFrequencyByTerm.get("orphan")
+  );
 });
 
 test("legacy prompt version remains supported", async () => {

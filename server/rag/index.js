@@ -84,13 +84,11 @@ export const ingestDocumentPages = async ({
     pageContent: chunk.pageContent,
     metadata: chunk.metadata,
   }));
-  let indexed = false;
 
   try {
     await addDocumentsToIndex({
       documents,
     });
-    indexed = true;
 
     await registerDocument({
       docId,
@@ -112,17 +110,22 @@ export const ingestDocumentPages = async ({
 
     return getDocument(docId);
   } catch (error) {
-    if (indexed) {
-      try {
-        await removeDocumentsFromIndex({
-          docIds: [docId],
-        });
-      } catch (rollbackError) {
-        console.error(
-          `Failed to roll back vector index entries for docId ${docId}.`,
-          rollbackError
-        );
-      }
+    // Rolled back unconditionally, not only when addDocumentsToIndex resolved.
+    // It writes the dense and sparse indexes concurrently (vector-store.js), so a
+    // rejection can still leave one of them populated -- and orphaned sparse
+    // entries are not merely dead weight: they feed the corpus-wide BM25
+    // statistics in sparse-store.js, skewing scores for every other document.
+    // Both removals ignore ids they do not hold, so this is safe when nothing was
+    // written.
+    try {
+      await removeDocumentsFromIndex({
+        docIds: [docId],
+      });
+    } catch (rollbackError) {
+      console.error(
+        `Failed to roll back vector index entries for docId ${docId}.`,
+        rollbackError
+      );
     }
 
     throw error;
