@@ -211,8 +211,179 @@ test("qa confidence uses fallback score threshold when grounded evidence is clos
   );
 });
 
-test("qa confidence rejects results that miss anchor-specific evidence", async () => {
+test("a strong dense score satisfies query-term coverage for comparison", async () => {
+  // Query-term coverage is lexical, so it vetoes exactly what hybrid retrieval
+  // exists to find: the document phrasing the same thing in other words. Asking
+  // about a "cap" of a clause reading "shall not exceed" matches only one of two
+  // query terms. Comparison is the structural worst case, because the words naming
+  // the task and the documents dilute the denominator without ever being able to
+  // appear in a clause. Fails before the semantic bypass exists.
   await withEnv(
+    {
+      RAG_MIN_RELEVANCE_SCORE: "0.32",
+      RAG_MIN_QUERY_TERM_COVERAGE: "0.51",
+    },
+    async () => {
+      const paraphrased = {
+        ...makeResult({
+          id: "paraphrased",
+          text: "The total liability of Vendor A shall not exceed the fees paid in the twelve (12) months preceding the claim.",
+          score: 0.5,
+          keywordScore: 0.5,
+        }),
+        vectorScore: 0.465,
+      };
+
+      const assessment = assessComparisonConfidence({
+        docIds: ["vendor-a", "vendor-b"],
+        queryText: "compare liability caps",
+        perDocumentResults: new Map([
+          ["vendor-a", [paraphrased]],
+          ["vendor-b", [{ ...paraphrased, id: "paraphrased-b" }]],
+        ]),
+      });
+
+      assert.equal(assessment.confident, true);
+      assert.equal(assessment.usableResultsByDoc.get("vendor-a").length, 1);
+      assert.equal(assessment.usableResultsByDoc.get("vendor-b").length, 1);
+    }
+  );
+});
+
+test("single-document QA keeps the strict lexical coverage requirement", async () => {
+  // The bypass is deliberately NOT extended to QA. There, low coverage carries real
+  // information: it marks a chunk answering only part of a multi-aspect question,
+  // which is what drives the gap-suggestion machinery. Granting the bypass here
+  // made a correct abstention silently disappear.
+  await withEnv(
+    {
+      RAG_MIN_RELEVANCE_SCORE: "0.32",
+      RAG_MIN_QUERY_TERM_COVERAGE: "0.51",
+    },
+    async () => {
+      const assessment = assessQaConfidence({
+        queryText: "compare liability caps",
+        results: [
+          {
+            ...makeResult({
+              id: "semantically-close",
+              text: "The total liability of Vendor A shall not exceed the fees paid.",
+              score: 0.5,
+              keywordScore: 0.5,
+            }),
+            vectorScore: 0.465,
+          },
+        ],
+      });
+
+      assert.equal(assessment.confident, false);
+      assert.equal(assessment.usableResults.length, 0);
+    }
+  );
+});
+
+test("a weak dense score does not rescue insufficient query-term coverage", async () => {
+  // The other half: the bypass must not become a way around the gate entirely.
+  // This is the off-topic chunk that shares one query word -- a governing-law
+  // clause against a liability question -- and it must stay rejected even in
+  // comparison, where the bypass is available.
+  await withEnv(
+    {
+      RAG_MIN_RELEVANCE_SCORE: "0.32",
+      RAG_MIN_QUERY_TERM_COVERAGE: "0.51",
+    },
+    async () => {
+      const offTopic = {
+        ...makeResult({
+          id: "off-topic",
+          text: "Section 12. Governing Law. This agreement is governed by the laws of Delaware.",
+          score: 0.5,
+          keywordScore: 0.5,
+        }),
+        vectorScore: 0.1849,
+      };
+
+      const assessment = assessComparisonConfidence({
+        docIds: ["vendor-a", "vendor-b"],
+        queryText: "compare liability caps",
+        perDocumentResults: new Map([
+          ["vendor-a", [offTopic]],
+          ["vendor-b", [{ ...offTopic, id: "off-topic-b" }]],
+        ]),
+      });
+
+      assert.equal(assessment.confident, false);
+    }
+  );
+});
+
+test("a result carrying no dense score keeps the original coverage behaviour", async () => {
+  // Reranked or sparse-only results may arrive without a vectorScore, and those
+  // must not be silently promoted by a bypass that cannot evaluate them.
+  await withEnv(
+    {
+      RAG_MIN_RELEVANCE_SCORE: "0.32",
+      RAG_MIN_QUERY_TERM_COVERAGE: "0.51",
+    },
+    async () => {
+      const noVectorScore = makeResult({
+        id: "no-vector-score",
+        text: "The total liability shall not exceed the fees paid.",
+        score: 0.5,
+        keywordScore: 0.5,
+      });
+
+      const assessment = assessComparisonConfidence({
+        docIds: ["vendor-a", "vendor-b"],
+        queryText: "compare liability caps",
+        perDocumentResults: new Map([
+          ["vendor-a", [noVectorScore]],
+          ["vendor-b", [{ ...noVectorScore, id: "no-vector-score-b" }]],
+        ]),
+      });
+
+      assert.equal(assessment.confident, false);
+    }
+  );
+});
+
+test("the dense bypass does not let a missing anchor through", async () => {
+  // The precision guarantee that must survive the bypass. A query naming a
+  // specific identifier still requires that identifier to be present, even when
+  // the chunk is semantically a great match -- otherwise "what does ABC-123
+  // require" gets answered from a different policy that merely reads similarly.
+  await withEnv(
+    {
+      RAG_MIN_RELEVANCE_SCORE: "0.32",
+      RAG_MIN_QUERY_TERM_COVERAGE: "0.51",
+    },
+    async () => {
+      const wrongPolicy = {
+        ...makeResult({
+          id: "similar-but-wrong-policy",
+          text: "The approval memo describes finance sign-off but names no code.",
+          score: 0.9,
+          keywordScore: 0.2,
+        }),
+        vectorScore: 0.95,
+      };
+
+      const assessment = assessComparisonConfidence({
+        docIds: ["vendor-a", "vendor-b"],
+        queryText: "Compare what ABC-123 requires.",
+        perDocumentResults: new Map([
+          ["vendor-a", [wrongPolicy]],
+          ["vendor-b", [{ ...wrongPolicy, id: "similar-but-wrong-policy-b" }]],
+        ]),
+      });
+
+      assert.equal(assessment.confident, false);
+      assert.match(assessment.reason, /ABC-123/);
+    }
+  );
+});
+
+test("qa confidence rejects results that miss anchor-specific evidence", async () => {  await withEnv(
     {
       RAG_MIN_RELEVANCE_SCORE: "0.5",
       RAG_MIN_QUERY_TERM_COVERAGE: "0.5",
