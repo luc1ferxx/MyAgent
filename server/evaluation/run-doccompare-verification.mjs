@@ -34,13 +34,20 @@
 // failures are reported and do not fail the run.
 //
 // EXPECTED SELF-TEST RESULT: 16/18, with compare.answers and compare.value-binding
-// failing. That is correct, not a regression. The deterministic stand-in stitches
-// sentences out of the evidence block, which never states a concrete difference, so
-// the answer-verification layer abstains from the comparison -- and the harness
-// reports it as a failure rather than passing a fake. The comparison answer path
-// itself is covered against a model that does write a real comparison, by
-// "the MCP ask tool carries a real comparison summary onto the wire" in
-// test/rag.test.mjs. A full pass is only expected against a real model.
+// failing. That is correct, not a regression -- but read the reason carefully, because it
+// is easy to get wrong. The comparison answer has three stages (answer-writer.js ~923-957):
+// use the model's text if it passes isSafeStructuredDifferenceAnswer, else fall back to an
+// engine-constructed buildGroundedDifferenceAnswer, else abstain. Under the deterministic
+// stand-in BOTH the stitched text and the engine's grounded fallback fail that check, so it
+// abstains -- and this harness reports a failure rather than passing a fake.
+//
+// Do NOT assume the comparison answer path is covered elsewhere. "the MCP ask tool carries
+// a real comparison summary onto the wire" in test/rag.test.mjs runs under that file's stub
+// provider, whose completeText returns hand-written canned strings, and asserts only
+// engine-derived structured fields. It covers the comparison engine and the MCP
+// serialization seam, not a model writing a correct comparison. Whether a real model clears
+// isSafeStructuredDifferenceAnswer on these fixtures is exactly what this harness measures
+// and what nothing else does.
 
 import "dotenv/config";
 

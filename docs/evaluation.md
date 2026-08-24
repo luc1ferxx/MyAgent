@@ -326,7 +326,11 @@ node evaluation/run-doccompare-verification.mjs --self-test
 
 用 synthetic eval 那套 deterministic provider 跑完整流程，不需要 key 和网络，用来确认 harness 本身能跑通 —— 避免 harness 的崩溃在别人第一次真实运行时才被发现。
 
-**预期结果是 16/18，不是全绿。** deterministic stand-in 只会把 evidence 里的句子缝起来，从不陈述具体差异，所以答案校验层会对对比路径弃答，`compare.answers` 和 `compare.value-binding` 因此失败 —— 这正是 harness 拒绝给假模型放行。对比答案路径本身由 `test/rag.test.mjs` 的 `the MCP ask tool carries a real comparison summary onto the wire` 覆盖（那条用的是会写出真正对比的模型）。全绿只应出现在真实模型上。自检报告写到 `latest-doccompare-selftest.*`，不会覆盖真实报告。
+**预期结果是 16/18，不是全绿。** 但失败的原因容易搞错，这里写清楚：对比答案有三级（`rag/answer-writer.js` 约 923-957 行）—— 模型文本过 `isSafeStructuredDifferenceAnswer` 就用它；否则退到引擎构造的 `buildGroundedDifferenceAnswer`；两者都不过才弃答。deterministic stand-in 下**两级都没过**，所以弃答，`compare.answers` 和 `compare.value-binding` 因此失败 —— 这正是 harness 拒绝给假模型放行。
+
+**不要以为对比答案路径在别处被覆盖了。** `test/rag.test.mjs` 的 `the MCP ask tool carries a real comparison summary onto the wire` 跑在该文件全局的 stub provider 下，`completeText` 返回的是手写死字符串，断言的只有引擎算出来的结构化字段（`comparedDocIds`、`evidenceBalance`、`explicitConflictPairs`）和引文。它真正覆盖的是**对比引擎**和 MCP 序列化接缝，不是「模型写出了正确的对比」—— 这条测试的名字夸大了它检查的内容。
+
+所以全绿只应出现在真实模型上，而「真实模型能否过 `isSafeStructuredDifferenceAnswer`」目前**没有测过**。第一次真跑时如果对比仍然弃答，值得查：为什么 `buildGroundedDifferenceAnswer` 在 3 页语料上不出答案，而在单元测试的 1 页语料上可以 —— 那会是真实的产品发现，不是 harness 的问题。自检报告写到 `latest-doccompare-selftest.*`，不会覆盖真实报告。
 
 ## Quality gate baseline
 
