@@ -29,6 +29,7 @@ Node 自定义评测是主回归，因为它能覆盖产品行为：
 | `cd server && npm run planner:gate -- --provider real` | 强制检查 real planner report、unexpected fallback rate 和 mock/real planner 分歧。 |
 | `cd server && npm run rollout:readiness` | 汇总 real planner gate、纯 LLM runtime target、trajectory gate、recovery gate、fallback rate 和 mock/real divergence，生成默认启用纯 LLM planner 前的 readiness signal。 |
 | `cd server && npm run runtime:smoke` | 用真实后端 HTTP 路径、真实 LLM planner 和 PostgreSQL smoke `/health` + `/chat`，确认 long/experience memory default-on、planner 选中 `llm`、experience memory 只进入 planning hints 而不进入 evidence sources。 |
+| `cd server && npm run verify:quality` | 用真实 embedding + chat 模型验证零基础设施档案下的检索、页码引文、对比取值归属、弃答和跨进程持久化。见 “DocCompare quality verification”。 |
 | `cd server && npm run feedback:corpus` | 从负反馈生成 synthetic 评测语料。 |
 | `cd server && npm run eval:feedback` | 用 seed + runtime feedback corpus 运行 deterministic 回归评测。 |
 | `cd server && npm run eval:robust-suite` | 手动运行 compare-hard synthetic、hard-CS rerank 和 arXiv real-paper rerank；固定周期由 Release Evidence Gate 调用同一 suite。 |
@@ -280,6 +281,52 @@ Smoke 断言：
 - `ragSources` 只包含 smoke document source，不包含 `agent_experience` 或 `successful_plan`
 
 报告写入 `evaluation/results/latest-runtime-smoke.json` 和 `.md`。`Planner Real Provider Gate` scheduled workflow 会启动 PostgreSQL service，在纯 LLM planner env 下先运行这个 smoke，再运行 `rollout:readiness` 把 smoke、real/mock planner gate、trajectory 和 recovery 汇总成最终发布门。
+
+## DocCompare quality verification
+
+```bash
+cd server
+npm run verify:quality
+```
+
+这是唯一一条用**真实 embedding 模型 + 真实 chat 模型**验证「零基础设施档案」检索与对比质量的路径。其余测试都跑 deterministic stub embedder —— 那证明管线接通，不证明检索找对了文本。
+
+不需要 PostgreSQL，也不需要 OpenAI 官方 key：`rag/openai-client.js` 的 `resolveBaseUrl()` 支持 `OPENAI_BASE_URL` / `OPENAI_API_BASE`，所以任何提供 `/v1/embeddings` 和 `/v1/chat/completions` 的端点都行。本地 Ollama 示例（key 只要非空即可）：
+
+```bash
+cd server
+OPENAI_API_KEY=ollama \
+OPENAI_BASE_URL=http://127.0.0.1:11434/v1 \
+OPENAI_EMBEDDING_MODEL=nomic-embed-text \
+OPENAI_CHAT_MODEL=qwen2.5:7b \
+npm run verify:quality
+```
+
+五条路径：单文档问答（带页码引文）、双文档对比、**同文档控制组**、语料外弃答、第二个进程读同一份归档。
+
+两个设计使评分**不能被坏系统蒙过**：
+
+- 「永远弃答」的系统会通过所有弃答检查。所以弃答只在答题路径确实产出答案时才算有效，且这条交叉检查本身记为一个 check（`meta.abstention-is-discriminating`），而不是写在散文里。
+- 「永远声称找到差异」的系统会轻松通过对比测试。所以语料里放了一对逐字节相同的 `policy-v1.pdf` / `policy-v2.pdf`，在这对文档上编出差异即失败。
+
+页码是**对着 ground truth 校验**而不是校验「存在」：`evaluation/build-doccompare-fixtures.mjs` 知道每句话在第几页，所以引文指向错误页会被抓出来（`citationPageIsHonest` 按 excerpt 的特征词是否真在该页比对）。责任条款故意放在第 2 页，永远回答「第 1 页」的系统会失败。
+
+最关键的一条是 `compare.value-binding`：答案必须把每个数值绑定到它来源的那份文档（12 个月 → Vendor A，6 个月 → Vendor B），任一侧串到另一侧的数值即失败。自信而张冠李戴的答案比不回答更糟，而且读起来跟正确答案一模一样。
+
+检查分 blocking 和 advisory。advisory 只依赖模型措辞而非系统行为（例如是否说出「identical」），小模型措辞不到位不算产品缺陷，不会让整轮失败。
+
+报告写入 `evaluation/results/latest-doccompare-verification.json` 和 `.md`，并在 artifact 里写明适用范围：它不衡量真实世界文档上的答案质量，不做模型对比，也不覆盖 PostgreSQL 部署。
+
+### 自检模式
+
+```bash
+cd server
+node evaluation/run-doccompare-verification.mjs --self-test
+```
+
+用 synthetic eval 那套 deterministic provider 跑完整流程，不需要 key 和网络，用来确认 harness 本身能跑通 —— 避免 harness 的崩溃在别人第一次真实运行时才被发现。
+
+**预期结果是 16/18，不是全绿。** deterministic stand-in 只会把 evidence 里的句子缝起来，从不陈述具体差异，所以答案校验层会对对比路径弃答，`compare.answers` 和 `compare.value-binding` 因此失败 —— 这正是 harness 拒绝给假模型放行。对比答案路径本身由 `test/rag.test.mjs` 的 `the MCP ask tool carries a real comparison summary onto the wire` 覆盖（那条用的是会写出真正对比的模型）。全绿只应出现在真实模型上。自检报告写到 `latest-doccompare-selftest.*`，不会覆盖真实报告。
 
 ## Quality gate baseline
 
