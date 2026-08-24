@@ -22,6 +22,10 @@ server/.env
 /server/evaluation/results/latest-feedback.json
 /server/evaluation/results/latest-quality.json
 /server/evaluation/results/latest-current-quality-gate.json
+/server/evaluation/results/latest-doccompare-verification.json
+/server/evaluation/results/latest-doccompare-verification.md
+/server/evaluation/results/latest-doccompare-selftest.json
+/server/evaluation/results/latest-doccompare-selftest.md
 /server/evaluation/results/latest-trajectory.json
 /server/evaluation/results/latest-planner.json
 /server/evaluation/results/latest-planner-*.json
